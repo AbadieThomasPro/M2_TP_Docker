@@ -135,9 +135,41 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 │   ├── nginx.conf.template  # config nginx avec ${VARIABLES} remplacées au démarrage
 │   └── entrypoint.sh        # génère la config puis lance nginx
 ├── docker-compose.yml       # orchestration des 3 conteneurs
+├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
 └── README.md
 ```
+
+---
+
+## Variables : ARG, ENV et .env
+
+La configuration se fait à trois niveaux, chacun avec un rôle précis :
+
+| Niveau | Où | Quand | Rôle |
+|---|---|---|---|
+| `ARG` | Dockerfile | **Build** uniquement | Paramètre la construction de l'image (version d'Alpine, port documenté). N'existe plus dans le conteneur, sauf s'il est recopié dans un `ENV`. |
+| `ENV` | Dockerfile | **Run** | Valeurs **par défaut** de l'application, présentes dans l'image. L'image fonctionne seule, même sans compose. |
+| `.env` | Racine du projet | Lecture par **compose** | Source unique des valeurs : compose remplace chaque `${VARIABLE}` du `docker-compose.yml` par sa valeur. |
+
+```
+ .env ──▶ docker-compose.yml ─┬─ build.args:   ──▶ ARG  (build de l'image)
+                              ├─ environment:  ──▶ ENV  (surcharge au run, sans rebuild)
+                              └─ deploy / ports ──▶ ressources CPU/mémoire, port publié
+```
+
+### ARG communs aux 3 images
+
+| ARG | Défaut | Utilisation |
+|---|---|---|
+| `ALPINE_VERSION` | `3.20` | Déclaré **avant** `FROM` pour être utilisable dans `FROM alpine:${ALPINE_VERSION}`. On change la version de l'OS de toutes les images depuis le `.env`, sans toucher aux Dockerfile. |
+| `PORT` | `80` (front, gateway) / `3000` (back) | Sert à `EXPOSE ${PORT}` et de valeur par défaut à `ENV PORT=${PORT}`. Le port documenté par l'image et le port d'écoute restent ainsi cohérents. |
+
+### Pourquoi un `.env` ?
+- **Une seule source de vérité** : les ports, la mémoire, les CPU et la phrase sont regroupés dans un seul fichier. Le `docker-compose.yml` ne contient plus de valeurs en dur.
+- **Cohérence entre services** : `BACK_PORT` est utilisé à la fois par le back (port d'écoute) et par la gateway (port à joindre). Une seule modification met les deux à jour.
+- **Surcharge simple** : une variable d'environnement du shell est prioritaire sur le `.env`. Par exemple, `BACK_PHRASE="Autre phrase" docker compose up -d` change la phrase sans modifier de fichier ni reconstruire l'image (testé).
+- Le `.env` est **versionné volontairement** : il ne contient aucun secret, seulement de la configuration.
 
 ---
 
@@ -158,7 +190,10 @@ Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de serv
 | Choix | Justification |
 |---|---|
 | `alpine:3.20` | OS minimal (~8 Mo) : surface d'attaque réduite et image légère. On n'utilise pas l'image officielle `node` : Node est installé nous-mêmes. |
-| Version fixée (`3.20`) plutôt que `latest` | Build reproductible : la même version d'OS et de Node à chaque build, pas de changement surprise. |
+| Version fixée (`3.20`) plutôt que `latest` | Build reproductible : la même version d'OS et de Node à chaque build, pas de changement surprise. La version est passée par l'ARG `ALPINE_VERSION`. |
+| Ordre des instructions | Ce qui change rarement en haut (OS, paquets, utilisateur, variables), le code (`COPY`) en bas. Modifier le code ne reconstruit que les dernières couches : les couches au-dessus restent en cache. |
+
+Pas de **multi-stage build** : il n'y a aucune étape de compilation (pas de TypeScript, pas de bundler, pas de `npm install`). Un stage de build n'apporterait rien.
 
 ### Dépendances installées
 
@@ -190,13 +225,20 @@ Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index 
 
 `EXPOSE` documente les ports : leur publication réelle se fait au run (`-p` ou `ports:` dans le compose).
 
-### Arguments attendus au run
+### Arguments de build (ARG)
+
+| ARG | Défaut | Rôle |
+|---|---|---|
+| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `PORT` | `80` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
+
+### Arguments attendus au run (ENV)
 
 Variables d'environnement surchargeables avec `-e` ou `environment:` dans le compose :
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `PORT` | `80` | Port d'écoute du serveur HTTP. |
+| `PORT` | `80` (vient de l'ARG) | Port d'écoute du serveur HTTP. |
 | `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`). À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. |
 | `GATEWAY_HOST` | `gateway` | Hôte vers lequel relayer `/api` : le nom du service gateway dans le compose. |
 | `GATEWAY_PORT` | `80` | Port de la gateway. |
@@ -280,11 +322,18 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 |---|---|
 | `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau interne du compose. |
 
-### Arguments attendus au run
+### Arguments de build (ARG)
+
+| ARG | Défaut | Rôle |
+|---|---|---|
+| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `PORT` | `3000` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
+
+### Arguments attendus au run (ENV)
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `PORT` | `3000` | Port d'écoute de l'API. |
+| `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
 | `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`), à aligner sur la limite mémoire du conteneur. |
 | `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
@@ -369,11 +418,18 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 |---|---|
 | `80` | Port HTTP de la gateway, joint par le front sur le réseau interne (`GATEWAY_PORT`). Il n'est pas publié sur la machine hôte. |
 
-### Arguments attendus au run
+### Arguments de build (ARG)
+
+| ARG | Défaut | Rôle |
+|---|---|---|
+| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `PORT` | `80` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
+
+### Arguments attendus au run (ENV)
 
 | Variable | Défaut | Rôle |
 |---|---|---|
-| `PORT` | `80` | Port d'écoute de nginx. |
+| `PORT` | `80` (vient de l'ARG) | Port d'écoute de nginx. |
 | `WORKER_PROCESSES` | `1` | Nombre de processus workers nginx. À aligner sur le nombre de CPU alloués au conteneur (`cpus:` dans le compose). |
 | `WORKER_CONNECTIONS` | `512` | Connexions simultanées max par worker. Plus la valeur est haute, plus nginx peut consommer de mémoire. |
 | `BACK_HOST` / `BACK_PORT` | `back` / `3000` | Adresse du conteneur back (nom du service dans le compose). |
@@ -437,15 +493,20 @@ L'application est accessible sur **http://localhost:8080**.
 
 ### Arguments traduits dans le compose
 
-Chaque argument attendu par les images (voir les sections ci-dessus) est passé dans le bloc `environment:` de son service :
+Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .env](#variables--arg-env-et-env)). Pour chaque service :
+- `build.args` transmet les **ARG** du Dockerfile ;
+- `environment:` surcharge les **ENV** du Dockerfile au run ;
+- `deploy.resources` et `ports` utilisent aussi des variables du `.env`.
 
-| Service | Variables passées |
-|---|---|
-| `back` | `PORT=3000`, `NODE_MAX_MEMORY=128`, `PHRASE`, `TZ` |
-| `gateway` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `BACK_HOST=back`, `BACK_PORT=3000`, `TZ` |
-| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `GATEWAY_HOST=gateway`, `GATEWAY_PORT=80`, `TZ` |
+| Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
+|---|---|---|---|
+| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_MAX_MEMORY`, `PHRASE`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT` |
+| `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_MAX_MEMORY`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 
-Les noms d'hôte `gateway` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs. Aucune adresse IP n'est écrite en dur.
+`ALPINE_VERSION` et `TZ` sont communs à tous les services.
+
+Les noms d'hôte `gateway` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs. Ils sont écrits directement dans le compose, et non dans le `.env`, car ils dépendent de la structure du compose et non de la configuration. Aucune adresse IP n'est écrite en dur.
 
 ### Limitation des ressources
 

@@ -1,30 +1,35 @@
+# ARG avant FROM : version d'Alpine choisie au build (seul ARG utilisable dans FROM)
+ARG ALPINE_VERSION=3.20
+
 # OS de base minimal, Node est installé nous-mêmes
-FROM alpine:3.20
+FROM alpine:${ALPINE_VERSION}
 
 # nodejs : exécute le serveur / tini : init PID 1, relaie SIGTERM / tzdata : fuseaux horaires
 RUN apk add --no-cache nodejs tini tzdata
 
-# Fuseau horaire des logs
-ENV TZ=Europe/Paris
-
 # Utilisateur sans droits root pour faire tourner le serveur
 RUN adduser -D -H front
 
-# Dossier de l'application
-WORKDIR /app
+# ARG (build) : port d'écoute, sert à EXPOSE et de valeur par défaut à ENV PORT
+ARG PORT=80
 
-# Copie du code (appartient à root, lecture seule pour "front")
-COPY server.js ./
-COPY src/ ./src/
-
-# Arguments modifiables au run : port, mémoire max de Node (Mo) et adresse de la gateway
-ENV PORT=80 \
+# ENV (run) : valeurs par défaut, surchargées par environment: du compose
+ENV TZ=Europe/Paris \
+    PORT=${PORT} \
     NODE_MAX_MEMORY=128 \
     GATEWAY_HOST=gateway \
     GATEWAY_PORT=80
 
-# Ports documentés du conteneur
-EXPOSE 80
+# Port documenté du conteneur
+EXPOSE ${PORT}
+
+# Dossier de l'application
+WORKDIR /app
+
+# Code copié en dernier : il change souvent, les couches au-dessus restent en cache
+# (appartient à root, lecture seule pour "front")
+COPY server.js ./
+COPY src/ ./src/
 
 # Bascule sur l'utilisateur non-root
 USER front

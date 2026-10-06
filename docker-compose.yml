@@ -1,22 +1,28 @@
 name: docker-cloud
 
+# Toutes les valeurs ${...} viennent du fichier .env (lu automatiquement par compose)
+
 services:
   # API qui renvoie la phrase
   back:
-    build: ./Backend
+    build:
+      context: ./Backend
+      args:                           # ARG du Dockerfile (build)
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        PORT: ${BACK_PORT}
     image: docker-cloud/back
-    environment:
-      PORT: 3000
-      NODE_MAX_MEMORY: 128          # tas Node (Mo), sous la limite mémoire du conteneur
-      PHRASE: "Hello World depuis le back !"
-      TZ: Europe/Paris
+    environment:                      # ENV du Dockerfile surchargées (run)
+      PORT: ${BACK_PORT}
+      NODE_MAX_MEMORY: ${BACK_NODE_MAX_MEMORY}   # tas Node (Mo), sous la limite mémoire
+      PHRASE: ${BACK_PHRASE}
+      TZ: ${TZ}
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: 192M
+          cpus: "${BACK_CPUS}"
+          memory: ${BACK_MEMORY}
         reservations:
-          memory: 64M
+          memory: ${BACK_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
     networks:
@@ -24,25 +30,29 @@ services:
 
   # Passerelle d'API (nginx) : liaison front -> back, joignable seulement en interne
   gateway:
-    build: ./Gateway
+    build:
+      context: ./Gateway
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        PORT: ${GATEWAY_PORT}
     image: docker-cloud/gateway
     environment:
-      PORT: 80
-      WORKER_PROCESSES: 1           # aligné sur la limite CPU
-      WORKER_CONNECTIONS: 512
-      BACK_HOST: back
-      BACK_PORT: 3000
-      TZ: Europe/Paris
+      PORT: ${GATEWAY_PORT}
+      WORKER_PROCESSES: ${GATEWAY_WORKER_PROCESSES}   # aligné sur la limite CPU
+      WORKER_CONNECTIONS: ${GATEWAY_WORKER_CONNECTIONS}
+      BACK_HOST: back                 # nom du service back
+      BACK_PORT: ${BACK_PORT}
+      TZ: ${TZ}
     depends_on:
       back:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: 64M
+          cpus: "${GATEWAY_CPUS}"
+          memory: ${GATEWAY_MEMORY}
         reservations:
-          memory: 16M
+          memory: ${GATEWAY_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
     networks:
@@ -50,26 +60,30 @@ services:
 
   # Page HTML + JS : seul point d'entrée publié sur la machine
   front:
-    build: ./Frontend
+    build:
+      context: ./Frontend
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        PORT: ${FRONT_PORT}
     image: docker-cloud/front
     environment:
-      PORT: 80
-      NODE_MAX_MEMORY: 128
-      GATEWAY_HOST: gateway         # nom du service gateway
-      GATEWAY_PORT: 80
-      TZ: Europe/Paris
+      PORT: ${FRONT_PORT}
+      NODE_MAX_MEMORY: ${FRONT_NODE_MAX_MEMORY}
+      GATEWAY_HOST: gateway           # nom du service gateway
+      GATEWAY_PORT: ${GATEWAY_PORT}
+      TZ: ${TZ}
     ports:
-      - "8080:80"
+      - "${FRONT_PUBLISHED_PORT}:${FRONT_PORT}"   # hôte:conteneur
     depends_on:
       gateway:
         condition: service_healthy
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: 192M
+          cpus: "${FRONT_CPUS}"
+          memory: ${FRONT_MEMORY}
         reservations:
-          memory: 64M
+          memory: ${FRONT_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
     networks:
