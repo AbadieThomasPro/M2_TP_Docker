@@ -11,12 +11,10 @@ ENV TZ=Europe/Paris
 COPY nginx.conf.template /etc/nginx/nginx.conf.template
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
 
-# Arguments modifiables au run : port, ressources nginx et adresses du front et du back
+# Arguments modifiables au run : port, ressources nginx et adresse du back
 ENV PORT=80 \
     WORKER_PROCESSES=1 \
     WORKER_CONNECTIONS=512 \
-    FRONT_HOST=front \
-    FRONT_PORT=80 \
     BACK_HOST=back \
     BACK_PORT=3000
 

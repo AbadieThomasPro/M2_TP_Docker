@@ -22,30 +22,7 @@ services:
     networks:
       - interne
 
-  # Page HTML + JS
-  front:
-    build: ./Frontend
-    image: docker-cloud/front
-    environment:
-      PORT: 80
-      NODE_MAX_MEMORY: 128
-      TZ: Europe/Paris
-    depends_on:
-      back:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: 192M
-        reservations:
-          memory: 64M
-    stop_grace_period: 10s
-    restart: unless-stopped
-    networks:
-      - interne
-
-  # Reverse proxy : seul point d'entrée publié sur la machine
+  # Reverse proxy : liaison front -> back, joignable seulement en interne
   proxy:
     build: ./Proxy
     image: docker-cloud/proxy
@@ -53,16 +30,10 @@ services:
       PORT: 80
       WORKER_PROCESSES: 1           # aligné sur la limite CPU
       WORKER_CONNECTIONS: 512
-      FRONT_HOST: front
-      FRONT_PORT: 80
       BACK_HOST: back
       BACK_PORT: 3000
       TZ: Europe/Paris
-    ports:
-      - "8080:80"
     depends_on:
-      front:
-        condition: service_healthy
       back:
         condition: service_healthy
     deploy:
@@ -75,12 +46,39 @@ services:
     stop_grace_period: 10s
     restart: unless-stopped
     networks:
+      - interne
+
+  # Page HTML + JS : seul point d'entrée publié sur la machine
+  front:
+    build: ./Frontend
+    image: docker-cloud/front
+    environment:
+      PORT: 80
+      NODE_MAX_MEMORY: 128
+      PROXY_HOST: proxy             # nom du service proxy
+      PROXY_PORT: 80
+      TZ: Europe/Paris
+    ports:
+      - "8080:80"
+    depends_on:
+      proxy:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 192M
+        reservations:
+          memory: 64M
+    stop_grace_period: 10s
+    restart: unless-stopped
+    networks:
       - public
       - interne
 
 networks:
-  # Réseau exposé : seul le proxy y est branché
+  # Réseau exposé : seul le front y est branché
   public:
-  # Réseau privé sans accès extérieur : front et back n'y sont joignables que par le proxy
+  # Réseau privé sans accès extérieur : proxy et back n'y sont joignables que depuis le front
   interne:
     internal: true

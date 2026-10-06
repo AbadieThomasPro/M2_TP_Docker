@@ -4,16 +4,43 @@ Mise en place d'une architecture virtualisée basée sur Docker : images personn
 
 Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
 
+## Architecture
+
+```
+                 machine hôte
+                      │ :8080 (seul port publié)
+  ┌───────────────────┼──────────────────────────────────────────┐
+  │ réseau "public"   ▼                                          │
+  │            ┌─────────────┐                                   │
+  │            │    front    │  Node : page + relais /api        │
+  │            └──────┬──────┘                                   │
+  ├───────────────────┼──────────────────────────────────────────┤
+  │ réseau "interne"  │ http://proxy/api/...  (internal: true)   │
+  │                   ▼                                          │
+  │            ┌─────────────┐        ┌─────────────┐            │
+  │            │    proxy    │ ─────▶ │    back     │            │
+  │            │    nginx    │  :3000 │ Node : API  │            │
+  │            └─────────────┘        └─────────────┘            │
+  └──────────────────────────────────────────────────────────────┘
+```
+
+1. Le navigateur charge la page sur `http://localhost:8080` (front).
+2. `app.js` appelle `/api/phrase` sur la même origine, donc le front.
+3. Le `server.js` du front relaie l'appel vers `http://proxy/api/phrase` (nom du service Docker).
+4. Le proxy nginx transmet la requête au back (`back:3000`), qui renvoie la phrase en JSON.
+
+Seul le front est accessible depuis l'extérieur. Le proxy et le back ne sont joignables que sur le réseau interne.
+
 ## Structure du projet
 
 ```
 .
 ├── Frontend/
 │   ├── Dockerfile
-│   ├── server.js        # serveur HTTP Node (côté serveur, non servi au navigateur)
+│   ├── server.js        # serveur HTTP Node : sert la page et relaie /api vers le proxy
 │   └── src/
 │       ├── index.html   # page affichée
-│       └── app.js       # JS client (appellera le proxy plus tard)
+│       └── app.js       # JS client : récupère et affiche la phrase
 ├── Backend/
 │   ├── Dockerfile
 │   └── src/
@@ -31,7 +58,15 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
 
 ## Image Frontend
 
-Sert une page HTML unique. Le JavaScript client interrogera plus tard le proxy pour récupérer la phrase à afficher depuis le back.
+**Point d'entrée** de l'architecture. Le `server.js` a deux rôles :
+
+| Requête reçue | Traitement |
+|---|---|
+| `/`, `/index.html`, `/app.js` | Fichiers de `src/` servis au navigateur |
+| `/api/...` | Relayée vers `http://${PROXY_HOST}:${PROXY_PORT}` (le proxy), puis la réponse est renvoyée au navigateur |
+| autre | `404` |
+
+Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `proxy` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/phrase` sur le front (même origine, pas de CORS), et c'est le front qui contacte le proxy. Si le proxy est injoignable, le front répond `502`.
 
 ### Image de base
 
@@ -46,7 +81,7 @@ Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index 
 
 | Dépendance | Rôle | Pourquoi ce choix |
 |---|---|---|
-| `nodejs` | Exécute `server.js`, le serveur HTTP qui distribue la page | Seul le runtime est installé, sans `npm` : le serveur utilise uniquement le module natif `http`, donc aucune librairie externe n'est nécessaire. |
+| `nodejs` | Exécute `server.js`, qui distribue la page et relaie `/api` | Seul le runtime est installé, sans `npm` : le serveur et le relais utilisent uniquement le module natif `http`, donc aucune librairie externe n'est nécessaire. |
 | `tini` | Init minimal lancé en PID 1 | Transmet correctement les signaux (SIGTERM lors d'un `docker stop`) à Node et nettoie les processus zombies. Sans lui, Node en PID 1 peut ignorer SIGTERM et le conteneur est tué brutalement après 10 s. |
 | `tzdata` | Base des fuseaux horaires | Permet d'avoir l'heure de Paris (`TZ=Europe/Paris`) dans les logs au lieu de l'UTC. |
 
@@ -66,7 +101,7 @@ Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index 
 
 | Port | Usage |
 |---|---|
-| `80` | Port HTTP du serveur front (valeur par défaut de `PORT`). |
+| `80` | Port HTTP du serveur front (valeur par défaut de `PORT`). C'est le seul port publié sur la machine hôte dans le compose (`8080:80`). |
 
 `EXPOSE` documente les ports : leur publication réelle se fait au run (`-p` ou `ports:` dans le compose).
 
@@ -78,6 +113,8 @@ Variables d'environnement surchargeables avec `-e` ou `environment:` dans le com
 |---|---|---|
 | `PORT` | `80` | Port d'écoute du serveur HTTP. |
 | `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`). À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. |
+| `PROXY_HOST` | `proxy` | Hôte vers lequel relayer `/api` : le nom du service proxy dans le compose. |
+| `PROXY_PORT` | `80` | Port du proxy. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -107,14 +144,16 @@ Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde,
 
 ```bash
 docker build -t front ./Frontend
-docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 --memory=192m --cpus=0.5 front
+docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 -e PROXY_HOST=proxy --memory=192m --cpus=0.5 front
 ```
+
+Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucun proxy n'est joignable : voir la section Orchestration.
 
 ---
 
 ## Image Backend
 
-Petite API HTTP qui renvoie une phrase en JSON. Le front la récupérera plus tard en passant par le proxy.
+Petite API HTTP qui renvoie une phrase en JSON. Le front la récupère en passant par le proxy.
 
 ### Routes
 
@@ -154,7 +193,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 
 | Port | Usage |
 |---|---|
-| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'a pas vocation à être publié sur la machine hôte : seul le proxy y accédera, via le réseau interne du compose. |
+| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seul le proxy y accède, via le réseau interne du compose. |
 
 ### Arguments attendus au run
 
@@ -172,7 +211,7 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://localhost:${PORT}/health || exit 1
 ```
 
-Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permettra au proxy de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
+Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permet au proxy de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
 
 ### Entrypoint et gestion de SIGTERM
 
@@ -192,23 +231,23 @@ docker build -t back ./Backend
 docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NODE_MAX_MEMORY=128 --memory=192m --cpus=0.5 back
 ```
 
-Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back ne sera pas publié.
+Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back n'est pas publié.
 
 ---
 
 ## Image Proxy (serveur web)
 
-Reverse proxy nginx : c'est le **seul point d'entrée** de l'architecture. Il reçoit toutes les requêtes du navigateur et les redirige vers le bon conteneur.
+Reverse proxy nginx : il fait la **liaison entre le front et le back**. Il n'est pas publié sur la machine hôte : seul le front le contacte, par son nom de service `proxy`, sur le réseau interne.
 
 ### Routage
 
-| Requête reçue | Redirigée vers | Rôle |
+| Requête reçue | Traitement | Rôle |
 |---|---|---|
-| `/api/...` | `back:3000` | Appels à l'API (ex. `/api/phrase`) |
-| `/health` | _répond lui-même_ `OK` | Santé du proxy (healthcheck) |
-| tout le reste (`/`, `/app.js`...) | `front:80` | Page et JS du front |
+| `/api/...` | Redirigée vers `back:3000` | Appels à l'API (ex. `/api/phrase`) |
+| `/health` | _Répond lui-même_ `OK` | Santé du proxy (healthcheck) |
+| tout le reste | `404` | Le proxy ne sert qu'à joindre l'API : rien d'autre n'est accessible à travers lui. |
 
-Le navigateur ne parle qu'au proxy : le front et le back restent sur le réseau interne. Comme la page et l'API sont servies depuis la même origine, il n'y a pas de problème de CORS.
+Le proxy isole le back : le front ne connaît que l'adresse `proxy`, pas celle du back. On peut changer ou déplacer le back en modifiant seulement `BACK_HOST` et `BACK_PORT` du proxy.
 
 ### Image de base
 
@@ -241,7 +280,7 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 
 | Port | Usage |
 |---|---|
-| `80` | Port HTTP du proxy, le seul à publier sur la machine hôte dans le compose. |
+| `80` | Port HTTP du proxy, joint par le front sur le réseau interne (`PROXY_PORT`). Il n'est pas publié sur la machine hôte. |
 
 ### Arguments attendus au run
 
@@ -250,7 +289,6 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 | `PORT` | `80` | Port d'écoute de nginx. |
 | `WORKER_PROCESSES` | `1` | Nombre de processus workers nginx. À aligner sur le nombre de CPU alloués au conteneur (`cpus:` dans le compose). |
 | `WORKER_CONNECTIONS` | `512` | Connexions simultanées max par worker. Plus la valeur est haute, plus nginx peut consommer de mémoire. |
-| `FRONT_HOST` / `FRONT_PORT` | `front` / `80` | Adresse du conteneur front (nom du service dans le compose). |
 | `BACK_HOST` / `BACK_PORT` | `back` / `3000` | Adresse du conteneur back (nom du service dans le compose). |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
@@ -261,7 +299,7 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 ```
 
-La route `/health` est traitée directement par nginx, sans passer par le front ou le back : elle vérifie uniquement que le proxy est en vie.
+La route `/health` est traitée directement par nginx, sans passer par le back : elle vérifie uniquement que le proxy est en vie.
 
 On utilise `127.0.0.1` et non `localhost` : dans Alpine, `localhost` se résout d'abord en IPv6 (`::1`), alors que nginx n'écoute qu'en IPv4. Le healthcheck échouait avec `localhost`.
 
@@ -283,18 +321,18 @@ Résultat testé : `docker stop` arrête le proxy en moins d'une seconde.
 
 ### Build et run
 
-Le proxy a besoin du front et du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas les hôtes `front` et `back`.
+Le proxy a besoin du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas l'hôte `back`. Le front se branche ensuite sur ce réseau et joint le proxy par son nom.
 
 ```bash
 docker build -t proxy ./Proxy
 docker network create tp-net
-docker run -d --name front --network tp-net front
 docker run -d --name back  --network tp-net back
-docker run -d --name proxy --network tp-net -p 8080:80 \
+docker run -d --name proxy --network tp-net \
   -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=64m --cpus=0.5 proxy
+docker run -d --name front --network tp-net -p 8080:80 front
 ```
 
-Puis `http://localhost:8080/` affiche la page et `http://localhost:8080/api/phrase` renvoie la phrase du back. Le compose remplacera ces commandes et gérera l'ordre de démarrage.
+Puis `http://localhost:8080/` affiche la page avec la phrase du back. Le compose remplace ces commandes et gère l'ordre de démarrage.
 
 ---
 
@@ -317,10 +355,10 @@ Chaque argument attendu par les images (voir les sections ci-dessus) est passé 
 | Service | Variables passées |
 |---|---|
 | `back` | `PORT=3000`, `NODE_MAX_MEMORY=128`, `PHRASE`, `TZ` |
-| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `TZ` |
-| `proxy` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `FRONT_HOST/PORT`, `BACK_HOST/PORT`, `TZ` |
+| `proxy` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `BACK_HOST=back`, `BACK_PORT=3000`, `TZ` |
+| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `PROXY_HOST=proxy`, `PROXY_PORT=80`, `TZ` |
 
-Les noms d'hôte `front` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs.
+Les noms d'hôte `proxy` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs. Aucune adresse IP n'est écrite en dur.
 
 ### Limitation des ressources
 
@@ -339,23 +377,21 @@ Consommation mesurée au repos avec `docker stats` : proxy environ 2 Mo, front e
 ### Ordre de démarrage
 
 ```yaml
-front:
+proxy:
   depends_on:
     back:
       condition: service_healthy
 
-proxy:
+front:
   depends_on:
-    front:
-      condition: service_healthy
-    back:
+    proxy:
       condition: service_healthy
 ```
 
-- Le **front** attend que le back soit `healthy` : la page n'est servie qu'une fois que l'API qui fournit la phrase est disponible.
-- Le **proxy** attend que le front **et** le back soient `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `front` et `back`.
+- Le **proxy** attend que le back soit `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `back`.
+- Le **front** attend que le proxy soit `healthy` : la page n'est servie qu'une fois que toute la chaîne vers l'API est disponible.
 
-Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `front` → `proxy`.
+Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `proxy` → `front`.
 
 ### Gestion de l'arrêt (SIGTERM)
 
@@ -369,9 +405,9 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 
 | Réseau | Services | Rôle |
 |---|---|---|
-| `public` | `proxy` | Réseau relié à la machine hôte, utilisé pour publier le port `8080:80`. |
-| `interne` (`internal: true`) | `proxy`, `front`, `back` | Réseau privé sans accès vers l'extérieur. Le front et le back n'y sont joignables que par le proxy. |
+| `public` | `front` | Réseau relié à la machine hôte, utilisé pour publier le port `8080:80`. |
+| `interne` (`internal: true`) | `front`, `proxy`, `back` | Réseau privé sans accès vers l'extérieur. Le proxy et le back n'y sont joignables que par les autres conteneurs. |
 
-Seul le proxy publie un port (`8080:80`). Le front et le back exposent leur port (`80` et `3000`) uniquement sur le réseau interne : depuis la machine hôte, `localhost:3000` n'est pas joignable (vérifié).
+Seul le front publie un port (`8080:80`). Le proxy et le back n'ont aucun `ports:` : leur port (`80` et `3000`) n'existe que sur le réseau interne et n'est pas joignable depuis la machine hôte (vérifié avec `docker compose ps`). Même en cas de faille dans le front, le back ne peut être atteint qu'à travers le proxy, qui ne laisse passer que `/api/`.
 
-**Deux conteneurs sur le port 80 ?** Le front et le proxy écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le proxy est publié (sur `8080`).
+**Deux conteneurs sur le port 80 ?** Le front et le proxy écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le front est publié (sur `8080`).

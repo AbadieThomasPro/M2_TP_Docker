@@ -17,9 +17,11 @@ WORKDIR /app
 COPY server.js ./
 COPY src/ ./src/
 
-# Arguments modifiables au run : port d'écoute et mémoire max de Node (Mo)
+# Arguments modifiables au run : port, mémoire max de Node (Mo) et adresse du proxy
 ENV PORT=80 \
-    NODE_MAX_MEMORY=128
+    NODE_MAX_MEMORY=128 \
+    PROXY_HOST=proxy \
+    PROXY_PORT=80
 
 # Ports documentés du conteneur
 EXPOSE 80
