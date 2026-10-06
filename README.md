@@ -4,7 +4,38 @@ Mise en place d'une architecture virtualisée basée sur Docker : images personn
 
 Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
 
-## Architecture
+## Sujet : mini cloud de stockage
+
+Un service de stockage de fichiers simplifié, à la manière d'un Google Drive minimal, hébergé sur notre propre « cloud » Docker.
+
+| Fonctionnalité | Description |
+|---|---|
+| Envoyer un fichier | Upload depuis la page web |
+| Lister les fichiers | Nom, taille, date d'envoi |
+| Télécharger un fichier | Lien de téléchargement |
+| Supprimer un fichier | Bouton de suppression |
+
+### Ce que le sujet permet de montrer avec Docker
+
+| Notion Docker | Mise en œuvre dans le projet |
+|---|---|
+| Images personnalisées | 3 images construites depuis `alpine` : front (Node), back (Node), gateway (nginx). |
+| Persistance | Les fichiers sont stockés dans un **volume Docker** : ils survivent à l'arrêt, à la suppression et à la reconstruction des conteneurs. |
+| Isolation réseau | Seul le front est publié. La gateway, le back et le stockage restent sur un réseau interne. |
+| Limitation des ressources | CPU et mémoire par conteneur, plus une taille max d'upload imposée par nginx (`client_max_body_size`). |
+| Scalabilité | Plusieurs instances du back derrière la gateway nginx, qui répartit la charge (voir [Scalabilité](#scalabilité)). |
+
+### Avancement
+
+| Étape | Statut |
+|---|---|
+| 3 images (front, back, gateway), compose, réseaux, healthchecks, SIGTERM | ✅ Fait |
+| Chaîne front → gateway → back fonctionnelle (`/api/phrase`) | ✅ Fait |
+| API de fichiers (upload, liste, téléchargement, suppression) + volume | ⏳ À faire |
+| Interface web du stockage | ⏳ À faire |
+| Scalabilité du back (plusieurs instances, répartition par nginx) | ⏳ À faire |
+
+## Architecture actuelle
 
 ```
                  machine hôte
@@ -15,10 +46,10 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
   │            │    front    │  Node : page + relais /api        │
   │            └──────┬──────┘                                   │
   ├───────────────────┼──────────────────────────────────────────┤
-  │ réseau "interne"  │ http://proxy/api/...  (internal: true)   │
+  │ réseau "interne"  │ http://gateway/api/...  (internal: true) │
   │                   ▼                                          │
   │            ┌─────────────┐        ┌─────────────┐            │
-  │            │    proxy    │ ─────▶ │    back     │            │
+  │            │   gateway   │ ─────▶ │    back     │            │
   │            │    nginx    │  :3000 │ Node : API  │            │
   │            └─────────────┘        └─────────────┘            │
   └──────────────────────────────────────────────────────────────┘
@@ -26,10 +57,64 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
 
 1. Le navigateur charge la page sur `http://localhost:8080` (front).
 2. `app.js` appelle `/api/phrase` sur la même origine, donc le front.
-3. Le `server.js` du front relaie l'appel vers `http://proxy/api/phrase` (nom du service Docker).
-4. Le proxy nginx transmet la requête au back (`back:3000`), qui renvoie la phrase en JSON.
+3. Le `server.js` du front relaie l'appel vers `http://gateway/api/phrase` (nom du service Docker).
+4. La gateway nginx transmet la requête au back (`back:3000`), qui renvoie la phrase en JSON.
 
-Seul le front est accessible depuis l'extérieur. Le proxy et le back ne sont joignables que sur le réseau interne.
+Seul le front est accessible depuis l'extérieur. La gateway et le back ne sont joignables que sur le réseau interne.
+
+## Architecture cible
+
+```
+  Navigateur
+      │ :8080
+      ▼
+  ┌─────────┐  http://gateway/api  ┌─────────┐   répartition    ┌─────────┐
+  │  front  │ ───────────────────▶ │ gateway │ ───────────────▶ │ back #1 │──┐
+  └─────────┘                      │  nginx  │ ──────┐          └─────────┘  │
+                                   └─────────┘       │          ┌─────────┐  │   ┌────────────────┐
+                                                     ├────────▶ │ back #2 │──┼──▶│ volume Docker  │
+                                                     │          └─────────┘  │   │ "stockage"     │
+                                                     │          ┌─────────┐  │   │ /data/fichiers │
+                                                     └────────▶ │ back #3 │──┘   └────────────────┘
+                                                                └─────────┘
+```
+
+## Scalabilité
+
+L'objectif est de pouvoir lancer **plusieurs instances du back** avec une seule commande, sans changer de configuration. La gateway nginx répartit les requêtes entre elles.
+
+### Principe
+
+| Élément | Rôle dans la scalabilité |
+|---|---|
+| `docker compose up --scale back=3` (ou `deploy.replicas: 3`) | Lance 3 conteneurs identiques à partir de la même image `back`. |
+| DNS interne Docker | Le nom de service `back` renvoie les adresses IP de **toutes** les instances. |
+| nginx (`upstream`) | Répartit les requêtes `/api` entre les instances (round-robin par défaut). |
+| Volume partagé | Toutes les instances lisent et écrivent dans le **même** volume `stockage` : un fichier envoyé via `back #1` est téléchargeable via `back #3`. |
+
+### Conditions pour que ça fonctionne
+
+1. **Back sans état (stateless)** : aucune donnée n'est gardée en mémoire dans le conteneur. Les fichiers et leurs informations (nom, taille, date) sont lus directement depuis le volume. N'importe quelle instance peut donc répondre à n'importe quelle requête.
+2. **Pas de port publié sur le back** : plusieurs instances ne pourraient pas publier le même port sur la machine hôte. C'est déjà le cas, puisque seul le front est publié. C'est la gateway qui rend le scaling possible.
+3. **Pas de `container_name`** sur le back : Docker doit pouvoir nommer lui-même chaque instance (`back-1`, `back-2`...).
+4. **nginx doit voir les nouvelles instances** : nginx résout `back` au démarrage. Il faut soit utiliser le DNS de Docker avec un `resolver 127.0.0.11` et une durée de validité courte, soit recharger nginx (`nginx -s reload`) après un changement du nombre d'instances.
+5. **Noms de fichiers uniques** : deux instances qui écrivent en même temps ne doivent pas écraser le même fichier. On peut par exemple préfixer chaque nom par un identifiant unique.
+
+### Ressources
+
+Les limites de `deploy.resources` s'appliquent **à chaque instance**. Avec 3 instances du back à 0,5 CPU et 192 Mo, le back peut consommer au total 1,5 CPU et 576 Mo. Le nombre d'instances se choisit en fonction des ressources de la machine.
+
+### Démonstration prévue
+
+Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du conteneur qui a répondu. En rafraîchissant la page, on voit les requêtes passer d'une instance à l'autre, alors que tous les fichiers restent visibles.
+
+### Pourquoi c'est un avantage de Docker par rapport aux VM
+
+| | Machines virtuelles | Conteneurs Docker |
+|---|---|---|
+| Ajouter une instance | Créer et démarrer une VM complète (OS invité) : plusieurs minutes, plusieurs Go | Une commande (`--scale`) : quelques secondes, quelques Mo de mémoire par instance |
+| Configuration | À reproduire sur chaque VM | Identique pour toutes les instances, car elles viennent de la même image |
+| Ressources | Réservées par VM, même au repos | Partagées avec le noyau de l'hôte, limitées par conteneur (`cpus`, `memory`) |
 
 ## Structure du projet
 
@@ -37,7 +122,7 @@ Seul le front est accessible depuis l'extérieur. Le proxy et le back ne sont jo
 .
 ├── Frontend/
 │   ├── Dockerfile
-│   ├── server.js        # serveur HTTP Node : sert la page et relaie /api vers le proxy
+│   ├── server.js        # serveur HTTP Node : sert la page et relaie /api vers la gateway
 │   └── src/
 │       ├── index.html   # page affichée
 │       └── app.js       # JS client : récupère et affiche la phrase
@@ -45,7 +130,7 @@ Seul le front est accessible depuis l'extérieur. Le proxy et le back ne sont jo
 │   ├── Dockerfile
 │   └── src/
 │       └── server.js    # API HTTP Node qui renvoie une phrase
-├── Proxy/
+├── Gateway/
 │   ├── Dockerfile
 │   ├── nginx.conf.template  # config nginx avec ${VARIABLES} remplacées au démarrage
 │   └── entrypoint.sh        # génère la config puis lance nginx
@@ -63,10 +148,10 @@ Seul le front est accessible depuis l'extérieur. Le proxy et le back ne sont jo
 | Requête reçue | Traitement |
 |---|---|
 | `/`, `/index.html`, `/app.js` | Fichiers de `src/` servis au navigateur |
-| `/api/...` | Relayée vers `http://${PROXY_HOST}:${PROXY_PORT}` (le proxy), puis la réponse est renvoyée au navigateur |
+| `/api/...` | Relayée vers `http://${GATEWAY_HOST}:${GATEWAY_PORT}` (la gateway), puis la réponse est renvoyée au navigateur |
 | autre | `404` |
 
-Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `proxy` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/phrase` sur le front (même origine, pas de CORS), et c'est le front qui contacte le proxy. Si le proxy est injoignable, le front répond `502`.
+Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `gateway` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/phrase` sur le front (même origine, pas de CORS), et c'est le front qui contacte la gateway. Si la gateway est injoignable, le front répond `502`.
 
 ### Image de base
 
@@ -113,8 +198,8 @@ Variables d'environnement surchargeables avec `-e` ou `environment:` dans le com
 |---|---|---|
 | `PORT` | `80` | Port d'écoute du serveur HTTP. |
 | `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`). À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. |
-| `PROXY_HOST` | `proxy` | Hôte vers lequel relayer `/api` : le nom du service proxy dans le compose. |
-| `PROXY_PORT` | `80` | Port du proxy. |
+| `GATEWAY_HOST` | `gateway` | Hôte vers lequel relayer `/api` : le nom du service gateway dans le compose. |
+| `GATEWAY_PORT` | `80` | Port de la gateway. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -144,16 +229,16 @@ Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde,
 
 ```bash
 docker build -t front ./Frontend
-docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 -e PROXY_HOST=proxy --memory=192m --cpus=0.5 front
+docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 -e GATEWAY_HOST=gateway --memory=192m --cpus=0.5 front
 ```
 
-Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucun proxy n'est joignable : voir la section Orchestration.
+Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucune gateway n'est joignable : voir la section Orchestration.
 
 ---
 
 ## Image Backend
 
-Petite API HTTP qui renvoie une phrase en JSON. Le front la récupère en passant par le proxy.
+Petite API HTTP qui renvoie une phrase en JSON. Le front la récupère en passant par la gateway.
 
 ### Routes
 
@@ -193,7 +278,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 
 | Port | Usage |
 |---|---|
-| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seul le proxy y accède, via le réseau interne du compose. |
+| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau interne du compose. |
 
 ### Arguments attendus au run
 
@@ -211,7 +296,7 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://localhost:${PORT}/health || exit 1
 ```
 
-Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permet au proxy de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
+Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permet à la gateway de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
 
 ### Entrypoint et gestion de SIGTERM
 
@@ -235,19 +320,21 @@ Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:
 
 ---
 
-## Image Proxy (serveur web)
+## Image Gateway (serveur web)
 
-Reverse proxy nginx : il fait la **liaison entre le front et le back**. Il n'est pas publié sur la machine hôte : seul le front le contacte, par son nom de service `proxy`, sur le réseau interne.
+Passerelle d'API (API gateway) basée sur nginx, utilisé en reverse proxy : elle fait la **liaison entre le front et le back**. Elle n'est pas publiée sur la machine hôte : seul le front la contacte, par son nom de service `gateway`, sur le réseau interne.
+
+**Pourquoi « gateway » et pas « proxy » ?** Techniquement, nginx reste un reverse proxy. Mais son rôle dans l'architecture est plus large : c'est le **seul chemin vers l'API**. Il bloque tout ce qui n'est pas `/api`, impose des limites (taille des uploads) et répartira la charge entre les instances du back. Le nom « gateway » décrit ce rôle, et il évite la confusion avec le relais `/api` du front, qui fait lui aussi office de proxy.
 
 ### Routage
 
 | Requête reçue | Traitement | Rôle |
 |---|---|---|
 | `/api/...` | Redirigée vers `back:3000` | Appels à l'API (ex. `/api/phrase`) |
-| `/health` | _Répond lui-même_ `OK` | Santé du proxy (healthcheck) |
-| tout le reste | `404` | Le proxy ne sert qu'à joindre l'API : rien d'autre n'est accessible à travers lui. |
+| `/health` | _Répond lui-même_ `OK` | Santé de la gateway (healthcheck) |
+| tout le reste | `404` | La gateway ne sert qu'à joindre l'API : rien d'autre n'est accessible à travers elle. |
 
-Le proxy isole le back : le front ne connaît que l'adresse `proxy`, pas celle du back. On peut changer ou déplacer le back en modifiant seulement `BACK_HOST` et `BACK_PORT` du proxy.
+La gateway isole le back : le front ne connaît que l'adresse `gateway`, pas celle du back. On peut changer ou déplacer le back en modifiant seulement `BACK_HOST` et `BACK_PORT` de la gateway.
 
 ### Image de base
 
@@ -280,7 +367,7 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 
 | Port | Usage |
 |---|---|
-| `80` | Port HTTP du proxy, joint par le front sur le réseau interne (`PROXY_PORT`). Il n'est pas publié sur la machine hôte. |
+| `80` | Port HTTP de la gateway, joint par le front sur le réseau interne (`GATEWAY_PORT`). Il n'est pas publié sur la machine hôte. |
 
 ### Arguments attendus au run
 
@@ -299,7 +386,7 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 ```
 
-La route `/health` est traitée directement par nginx, sans passer par le back : elle vérifie uniquement que le proxy est en vie.
+La route `/health` est traitée directement par nginx, sans passer par le back : elle vérifie uniquement que la gateway est en vie.
 
 On utilise `127.0.0.1` et non `localhost` : dans Alpine, `localhost` se résout d'abord en IPv6 (`::1`), alors que nginx n'écoute qu'en IPv4. Le healthcheck échouait avec `localhost`.
 
@@ -317,18 +404,18 @@ Le script `entrypoint.sh` fait deux choses :
 
 **Pourquoi `STOPSIGNAL SIGQUIT` ?** Pour nginx, SIGTERM provoque un arrêt *rapide* qui coupe les connexions en cours, alors que SIGQUIT provoque un arrêt *gracieux* qui termine les requêtes en cours avant de quitter. Avec `STOPSIGNAL`, `docker stop` envoie SIGQUIT au lieu de SIGTERM. Si un SIGTERM est quand même reçu, nginx le gère aussi et s'arrête.
 
-Résultat testé : `docker stop` arrête le proxy en moins d'une seconde.
+Résultat testé : `docker stop` arrête la gateway en moins d'une seconde.
 
 ### Build et run
 
-Le proxy a besoin du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas l'hôte `back`. Le front se branche ensuite sur ce réseau et joint le proxy par son nom.
+La gateway a besoin du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas l'hôte `back`. Le front se branche ensuite sur ce réseau et joint la gateway par son nom.
 
 ```bash
-docker build -t proxy ./Proxy
+docker build -t gateway ./Gateway
 docker network create tp-net
 docker run -d --name back  --network tp-net back
-docker run -d --name proxy --network tp-net \
-  -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=64m --cpus=0.5 proxy
+docker run -d --name gateway --network tp-net \
+  -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=64m --cpus=0.5 gateway
 docker run -d --name front --network tp-net -p 8080:80 front
 ```
 
@@ -355,10 +442,10 @@ Chaque argument attendu par les images (voir les sections ci-dessus) est passé 
 | Service | Variables passées |
 |---|---|
 | `back` | `PORT=3000`, `NODE_MAX_MEMORY=128`, `PHRASE`, `TZ` |
-| `proxy` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `BACK_HOST=back`, `BACK_PORT=3000`, `TZ` |
-| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `PROXY_HOST=proxy`, `PROXY_PORT=80`, `TZ` |
+| `gateway` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `BACK_HOST=back`, `BACK_PORT=3000`, `TZ` |
+| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `GATEWAY_HOST=gateway`, `GATEWAY_PORT=80`, `TZ` |
 
-Les noms d'hôte `proxy` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs. Aucune adresse IP n'est écrite en dur.
+Les noms d'hôte `gateway` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs. Aucune adresse IP n'est écrite en dur.
 
 ### Limitation des ressources
 
@@ -370,32 +457,32 @@ Définie dans `deploy.resources` pour chaque service :
 |---|---|---|---|---|
 | `back` | 0,5 CPU | 192 Mo | 64 Mo | Node consomme environ 10 Mo au repos. `NODE_MAX_MEMORY=128` limite le tas JavaScript : Node libère sa mémoire avant d'atteindre la limite du conteneur. La marge de 64 Mo couvre la mémoire hors tas (runtime, buffers). |
 | `front` | 0,5 CPU | 192 Mo | 64 Mo | Même logique que le back. |
-| `proxy` | 0,5 CPU | 64 Mo | 16 Mo | nginx est très léger (environ 2 Mo au repos). Avec `WORKER_PROCESSES=1`, un seul worker suffit pour 0,5 CPU : plus de workers que de CPU n'apporterait rien. |
+| `gateway` | 0,5 CPU | 64 Mo | 16 Mo | nginx est très léger (environ 2 Mo au repos). Avec `WORKER_PROCESSES=1`, un seul worker suffit pour 0,5 CPU : plus de workers que de CPU n'apporterait rien. |
 
-Consommation mesurée au repos avec `docker stats` : proxy environ 2 Mo, front environ 9 Mo, back environ 10 Mo.
+Consommation mesurée au repos avec `docker stats` : gateway environ 2 Mo, front environ 9 Mo, back environ 10 Mo.
 
 ### Ordre de démarrage
 
 ```yaml
-proxy:
+gateway:
   depends_on:
     back:
       condition: service_healthy
 
 front:
   depends_on:
-    proxy:
+    gateway:
       condition: service_healthy
 ```
 
-- Le **proxy** attend que le back soit `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `back`.
-- Le **front** attend que le proxy soit `healthy` : la page n'est servie qu'une fois que toute la chaîne vers l'API est disponible.
+- La **gateway** attend que le back soit `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `back`.
+- Le **front** attend que la gateway soit `healthy` : la page n'est servie qu'une fois que toute la chaîne vers l'API est disponible.
 
-Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `proxy` → `front`.
+Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `gateway` → `front`.
 
 ### Gestion de l'arrêt (SIGTERM)
 
-- `docker compose down` envoie le signal d'arrêt à chaque conteneur : SIGTERM pour front et back, SIGQUIT pour le proxy (`STOPSIGNAL`).
+- `docker compose down` envoie le signal d'arrêt à chaque conteneur : SIGTERM pour front et back, SIGQUIT pour la gateway (`STOPSIGNAL`).
 - `stop_grace_period: 10s` : délai laissé à chaque conteneur pour s'arrêter proprement avant le kill forcé (SIGKILL).
 - Tous les services s'arrêtent proprement bien avant ce délai : l'arrêt complet mesuré prend moins de 2 secondes.
 
@@ -406,8 +493,8 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 | Réseau | Services | Rôle |
 |---|---|---|
 | `public` | `front` | Réseau relié à la machine hôte, utilisé pour publier le port `8080:80`. |
-| `interne` (`internal: true`) | `front`, `proxy`, `back` | Réseau privé sans accès vers l'extérieur. Le proxy et le back n'y sont joignables que par les autres conteneurs. |
+| `interne` (`internal: true`) | `front`, `gateway`, `back` | Réseau privé sans accès vers l'extérieur. La gateway et le back n'y sont joignables que par les autres conteneurs. |
 
-Seul le front publie un port (`8080:80`). Le proxy et le back n'ont aucun `ports:` : leur port (`80` et `3000`) n'existe que sur le réseau interne et n'est pas joignable depuis la machine hôte (vérifié avec `docker compose ps`). Même en cas de faille dans le front, le back ne peut être atteint qu'à travers le proxy, qui ne laisse passer que `/api/`.
+Seul le front publie un port (`8080:80`). La gateway et le back n'ont aucun `ports:` : leur port (`80` et `3000`) n'existe que sur le réseau interne et n'est pas joignable depuis la machine hôte (vérifié avec `docker compose ps`). Même en cas de faille dans le front, le back ne peut être atteint qu'à travers la gateway, qui ne laisse passer que `/api/`.
 
-**Deux conteneurs sur le port 80 ?** Le front et le proxy écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le front est publié (sur `8080`).
+**Deux conteneurs sur le port 80 ?** Le front et la gateway écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le front est publié (sur `8080`).

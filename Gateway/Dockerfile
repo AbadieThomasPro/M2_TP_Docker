@@ -1,7 +1,7 @@
 # OS de base minimal, nginx est installé nous-mêmes
 FROM alpine:3.20
 
-# nginx : reverse proxy / gettext-envsubst : génère la config depuis les variables / tzdata : fuseaux horaires
+# nginx : passerelle d'API (reverse proxy) / gettext-envsubst : génère la config depuis les variables / tzdata : fuseaux horaires
 RUN apk add --no-cache nginx gettext-envsubst tzdata
 
 # Fuseau horaire des logs
@@ -27,7 +27,7 @@ USER nginx
 # SIGQUIT = arrêt gracieux de nginx (termine les requêtes en cours)
 STOPSIGNAL SIGQUIT
 
-# Vérifie que le proxy répond (127.0.0.1 car nginx n'écoute qu'en IPv4)
+# Vérifie que la gateway répond (127.0.0.1 car nginx n'écoute qu'en IPv4)
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 

@@ -1,4 +1,4 @@
-// Récupère la phrase du back (via le front puis le proxy) et l'affiche dans #message
+// Récupère la phrase du back (via le front puis la gateway) et l'affiche dans #message
 const message = document.getElementById('message');
 
 fetch('/api/phrase')

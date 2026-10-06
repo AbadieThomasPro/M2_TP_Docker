@@ -22,7 +22,7 @@ http {
     server {
         listen ${PORT};
 
-        # Santé du proxy lui-même (healthcheck)
+        # Santé de la gateway elle-même (healthcheck)
         location = /health {
             access_log off;
             return 200 "OK";
@@ -36,7 +36,7 @@ http {
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
 
-        # Tout le reste est refusé : le proxy ne sert qu'à joindre l'API
+        # Tout le reste est refusé : la gateway ne sert qu'à joindre l'API
         location / {
             return 404;
         }

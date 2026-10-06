@@ -4,8 +4,8 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.PORT || 80;
-const PROXY_HOST = process.env.PROXY_HOST || 'proxy';
-const PROXY_PORT = process.env.PROXY_PORT || 80;
+const GATEWAY_HOST = process.env.GATEWAY_HOST || 'gateway';
+const GATEWAY_PORT = process.env.GATEWAY_PORT || 80;
 
 // Seuls ces fichiers de src/ sont servis
 const FILES = {
@@ -14,25 +14,25 @@ const FILES = {
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
 };
 
-// Relaie les appels /api/* vers le proxy (nom du service Docker, joignable seulement en interne)
-function relayToProxy(req, res) {
-  const proxyReq = http.request(
-    { host: PROXY_HOST, port: PROXY_PORT, path: req.url, method: req.method, headers: req.headers },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res);
+// Relaie les appels /api/* vers la gateway (nom du service Docker, joignable seulement en interne)
+function relayToGateway(req, res) {
+  const gatewayReq = http.request(
+    { host: GATEWAY_HOST, port: GATEWAY_PORT, path: req.url, method: req.method, headers: req.headers },
+    (gatewayRes) => {
+      res.writeHead(gatewayRes.statusCode, gatewayRes.headers);
+      gatewayRes.pipe(res);
     }
   );
-  proxyReq.on('error', () => {
+  gatewayReq.on('error', () => {
     res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ error: 'Proxy injoignable' }));
+    res.end(JSON.stringify({ error: 'Gateway injoignable' }));
   });
-  req.pipe(proxyReq);
+  req.pipe(gatewayReq);
 }
 
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/')) {
-    return relayToProxy(req, res);
+    return relayToGateway(req, res);
   }
 
   const file = FILES[req.url];
