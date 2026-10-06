@@ -14,6 +14,10 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
 │   └── src/
 │       ├── index.html   # page affichée
 │       └── app.js       # JS client (appellera le proxy plus tard)
+├── Backend/
+│   ├── Dockerfile
+│   └── src/
+│       └── server.js    # API HTTP Node qui renvoie une phrase
 └── README.md
 ```
 
@@ -99,3 +103,87 @@ Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde,
 docker build -t front ./Frontend
 docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 --memory=192m --cpus=0.5 front
 ```
+
+---
+
+## Image Backend
+
+Petite API HTTP qui renvoie une phrase en JSON. Le front la récupérera plus tard en passant par le proxy.
+
+### Routes
+
+| Route | Réponse |
+|---|---|
+| `GET /api/phrase` | `{"phrase": "..."}` : la phrase à afficher dans le front |
+| `GET /health` | `OK` : utilisée par le healthcheck |
+| Toute autre route | `404` avec `{"error": "Not found"}` |
+
+### Image de base
+
+Même choix que le Frontend : `alpine:3.20`, OS minimal en version fixée, avec Node installé par nos soins.
+
+### Dépendances installées
+
+Installées via `apk add --no-cache`, comme pour le Frontend.
+
+| Dépendance | Rôle | Pourquoi ce choix |
+|---|---|---|
+| `nodejs` | Exécute `src/server.js`, l'API HTTP | Seul le runtime est installé, sans `npm` : l'API n'utilise que le module natif `http` (pas d'Express), donc aucune librairie externe n'est nécessaire. |
+| `tini` | Init minimal lancé en PID 1 | Relaie SIGTERM à Node et nettoie les processus zombies, pour un arrêt propre lors d'un `docker stop`. |
+| `tzdata` | Base des fuseaux horaires | Heure de Paris dans les logs de l'API. |
+
+`wget` (healthcheck) est fourni par BusyBox : rien à installer.
+
+### Manipulations sur l'OS
+
+| Instruction | Explication |
+|---|---|
+| `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
+| `RUN adduser -D -H back` | Crée un utilisateur `back` sans mot de passe ni dossier personnel. L'API ne tourne pas en root. Un utilisateur distinct de celui du front permet d'identifier chaque service. |
+| `WORKDIR /app` | Dossier de travail de l'application. |
+| `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Tout le code est dans `src/`, car l'API ne sert aucun fichier statique à séparer du code serveur. |
+| `USER back` | Bascule sur l'utilisateur non-root pour l'exécution. |
+
+### Ports exposés
+
+| Port | Usage |
+|---|---|
+| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'a pas vocation à être publié sur la machine hôte : seul le proxy y accédera, via le réseau interne du compose. |
+
+### Arguments attendus au run
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `3000` | Port d'écoute de l'API. |
+| `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`), à aligner sur la limite mémoire du conteneur. |
+| `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
+| `TZ` | `Europe/Paris` | Fuseau horaire. |
+
+### Healthcheck
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD wget -qO- http://localhost:${PORT}/health || exit 1
+```
+
+Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permettra au proxy de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
+
+### Entrypoint et gestion de SIGTERM
+
+```dockerfile
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_MAX_MEMORY} src/server.js"]
+```
+
+Même mécanisme que le Frontend : `tini` en PID 1 relaie les signaux, `sh -c` remplace `${NODE_MAX_MEMORY}`, puis `exec` laisse la place à Node. Dans `server.js`, SIGTERM ferme le serveur proprement puis le processus quitte avec le code 0.
+
+Résultat testé : `docker stop` arrête le conteneur en moins d'une seconde.
+
+### Build et run
+
+```bash
+docker build -t back ./Backend
+docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NODE_MAX_MEMORY=128 --memory=192m --cpus=0.5 back
+```
+
+Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back ne sera pas publié.
