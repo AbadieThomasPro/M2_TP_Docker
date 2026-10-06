@@ -1,0 +1,2 @@
+# Scripts shell toujours en LF, sinon ils ne s'exécutent pas dans les conteneurs Linux
+*.sh text eol=lf

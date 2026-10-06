@@ -18,6 +18,12 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
 │   ├── Dockerfile
 │   └── src/
 │       └── server.js    # API HTTP Node qui renvoie une phrase
+├── Proxy/
+│   ├── Dockerfile
+│   ├── nginx.conf.template  # config nginx avec ${VARIABLES} remplacées au démarrage
+│   └── entrypoint.sh        # génère la config puis lance nginx
+├── docker-compose.yml       # orchestration des 3 conteneurs
+├── .gitattributes           # force les .sh en fins de ligne LF
 └── README.md
 ```
 
@@ -187,3 +193,185 @@ docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NOD
 ```
 
 Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back ne sera pas publié.
+
+---
+
+## Image Proxy (serveur web)
+
+Reverse proxy nginx : c'est le **seul point d'entrée** de l'architecture. Il reçoit toutes les requêtes du navigateur et les redirige vers le bon conteneur.
+
+### Routage
+
+| Requête reçue | Redirigée vers | Rôle |
+|---|---|---|
+| `/api/...` | `back:3000` | Appels à l'API (ex. `/api/phrase`) |
+| `/health` | _répond lui-même_ `OK` | Santé du proxy (healthcheck) |
+| tout le reste (`/`, `/app.js`...) | `front:80` | Page et JS du front |
+
+Le navigateur ne parle qu'au proxy : le front et le back restent sur le réseau interne. Comme la page et l'API sont servies depuis la même origine, il n'y a pas de problème de CORS.
+
+### Image de base
+
+`alpine:3.20`, comme les autres images. On n'utilise pas l'image officielle `nginx` : nginx est installé par nos soins depuis les paquets Alpine.
+
+### Dépendances installées
+
+Installées via `apk add --no-cache`.
+
+| Dépendance | Rôle | Pourquoi ce choix |
+|---|---|---|
+| `nginx` | Serveur web / reverse proxy | Référence pour ce rôle : léger, performant, et une techno différente des images Node, adaptée au besoin « serveur web ». |
+| `gettext-envsubst` | Commande `envsubst` | Remplace les `${VARIABLES}` du modèle de config par les valeurs passées au run. On installe uniquement ce sous-paquet, et non `gettext` complet, pour garder une image légère. |
+| `tzdata` | Base des fuseaux horaires | Heure de Paris dans les logs d'accès nginx. |
+
+Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maître gère lui-même les signaux et ses processus workers.
+
+### Manipulations sur l'OS
+
+| Instruction | Explication |
+|---|---|
+| `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
+| `COPY nginx.conf.template /etc/nginx/` | Modèle de configuration nginx, avec des variables à remplacer au démarrage. |
+| `COPY --chmod=755 entrypoint.sh /` | Script de démarrage, rendu exécutable directement à la copie (pas de `RUN chmod` en plus). |
+| `USER nginx` | L'utilisateur `nginx` est créé par le paquet nginx : pas besoin d'en créer un. nginx tourne donc sans les droits root. |
+| Fichiers d'exécution dans `/tmp` (config générée, PID, fichiers temporaires) | Un utilisateur non-root ne peut pas écrire dans `/etc/nginx` ni `/var/lib/nginx` : tout ce que nginx écrit au run va dans `/tmp`. |
+| Logs vers `/dev/stdout` et `/dev/stderr` | Les logs ne sont pas écrits dans des fichiers dans le conteneur : ils sont visibles avec `docker logs`. |
+
+### Ports exposés
+
+| Port | Usage |
+|---|---|
+| `80` | Port HTTP du proxy, le seul à publier sur la machine hôte dans le compose. |
+
+### Arguments attendus au run
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `80` | Port d'écoute de nginx. |
+| `WORKER_PROCESSES` | `1` | Nombre de processus workers nginx. À aligner sur le nombre de CPU alloués au conteneur (`cpus:` dans le compose). |
+| `WORKER_CONNECTIONS` | `512` | Connexions simultanées max par worker. Plus la valeur est haute, plus nginx peut consommer de mémoire. |
+| `FRONT_HOST` / `FRONT_PORT` | `front` / `80` | Adresse du conteneur front (nom du service dans le compose). |
+| `BACK_HOST` / `BACK_PORT` | `back` / `3000` | Adresse du conteneur back (nom du service dans le compose). |
+| `TZ` | `Europe/Paris` | Fuseau horaire. |
+
+### Healthcheck
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
+```
+
+La route `/health` est traitée directement par nginx, sans passer par le front ou le back : elle vérifie uniquement que le proxy est en vie.
+
+On utilise `127.0.0.1` et non `localhost` : dans Alpine, `localhost` se résout d'abord en IPv6 (`::1`), alors que nginx n'écoute qu'en IPv4. Le healthcheck échouait avec `localhost`.
+
+### Entrypoint et gestion des signaux
+
+```dockerfile
+STOPSIGNAL SIGQUIT
+ENTRYPOINT ["/entrypoint.sh"]
+```
+
+Le script `entrypoint.sh` fait deux choses :
+
+1. **Génère la config** : `envsubst` remplace les variables du modèle et écrit `/tmp/nginx.conf`. La liste des variables est donnée explicitement à `envsubst` pour ne pas effacer les variables propres à nginx (`$host`, `$remote_addr`...).
+2. **Lance nginx avec `exec`** : nginx remplace le shell et devient PID 1, il reçoit donc directement les signaux de Docker. `daemon off` le garde au premier plan, sinon le conteneur s'arrêterait aussitôt.
+
+**Pourquoi `STOPSIGNAL SIGQUIT` ?** Pour nginx, SIGTERM provoque un arrêt *rapide* qui coupe les connexions en cours, alors que SIGQUIT provoque un arrêt *gracieux* qui termine les requêtes en cours avant de quitter. Avec `STOPSIGNAL`, `docker stop` envoie SIGQUIT au lieu de SIGTERM. Si un SIGTERM est quand même reçu, nginx le gère aussi et s'arrête.
+
+Résultat testé : `docker stop` arrête le proxy en moins d'une seconde.
+
+### Build et run
+
+Le proxy a besoin du front et du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas les hôtes `front` et `back`.
+
+```bash
+docker build -t proxy ./Proxy
+docker network create tp-net
+docker run -d --name front --network tp-net front
+docker run -d --name back  --network tp-net back
+docker run -d --name proxy --network tp-net -p 8080:80 \
+  -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=64m --cpus=0.5 proxy
+```
+
+Puis `http://localhost:8080/` affiche la page et `http://localhost:8080/api/phrase` renvoie la phrase du back. Le compose remplacera ces commandes et gérera l'ordre de démarrage.
+
+---
+
+## Orchestration (docker-compose.yml)
+
+### Lancement
+
+```bash
+docker compose up -d --build   # build des 3 images puis démarrage
+docker compose ps              # état et santé des conteneurs
+docker compose down            # arrêt propre (SIGTERM / SIGQUIT) et suppression
+```
+
+L'application est accessible sur **http://localhost:8080**.
+
+### Arguments traduits dans le compose
+
+Chaque argument attendu par les images (voir les sections ci-dessus) est passé dans le bloc `environment:` de son service :
+
+| Service | Variables passées |
+|---|---|
+| `back` | `PORT=3000`, `NODE_MAX_MEMORY=128`, `PHRASE`, `TZ` |
+| `front` | `PORT=80`, `NODE_MAX_MEMORY=128`, `TZ` |
+| `proxy` | `PORT=80`, `WORKER_PROCESSES=1`, `WORKER_CONNECTIONS=512`, `FRONT_HOST/PORT`, `BACK_HOST/PORT`, `TZ` |
+
+Les noms d'hôte `front` et `back` sont les noms des services : le DNS interne de Docker les résout automatiquement vers les bons conteneurs.
+
+### Limitation des ressources
+
+Définie dans `deploy.resources` pour chaque service :
+- **`limits`** : plafond que le conteneur ne peut pas dépasser. En mémoire, s'il le dépasse il est tué (OOM) puis relancé grâce à `restart`.
+- **`reservations`** : mémoire minimale garantie au conteneur.
+
+| Service | CPU max | Mémoire max | Mémoire réservée | Justification |
+|---|---|---|---|---|
+| `back` | 0,5 CPU | 192 Mo | 64 Mo | Node consomme environ 10 Mo au repos. `NODE_MAX_MEMORY=128` limite le tas JavaScript : Node libère sa mémoire avant d'atteindre la limite du conteneur. La marge de 64 Mo couvre la mémoire hors tas (runtime, buffers). |
+| `front` | 0,5 CPU | 192 Mo | 64 Mo | Même logique que le back. |
+| `proxy` | 0,5 CPU | 64 Mo | 16 Mo | nginx est très léger (environ 2 Mo au repos). Avec `WORKER_PROCESSES=1`, un seul worker suffit pour 0,5 CPU : plus de workers que de CPU n'apporterait rien. |
+
+Consommation mesurée au repos avec `docker stats` : proxy environ 2 Mo, front environ 9 Mo, back environ 10 Mo.
+
+### Ordre de démarrage
+
+```yaml
+front:
+  depends_on:
+    back:
+      condition: service_healthy
+
+proxy:
+  depends_on:
+    front:
+      condition: service_healthy
+    back:
+      condition: service_healthy
+```
+
+- Le **front** attend que le back soit `healthy` : la page n'est servie qu'une fois que l'API qui fournit la phrase est disponible.
+- Le **proxy** attend que le front **et** le back soient `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `front` et `back`.
+
+Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `front` → `proxy`.
+
+### Gestion de l'arrêt (SIGTERM)
+
+- `docker compose down` envoie le signal d'arrêt à chaque conteneur : SIGTERM pour front et back, SIGQUIT pour le proxy (`STOPSIGNAL`).
+- `stop_grace_period: 10s` : délai laissé à chaque conteneur pour s'arrêter proprement avant le kill forcé (SIGKILL).
+- Tous les services s'arrêtent proprement bien avant ce délai : l'arrêt complet mesuré prend moins de 2 secondes.
+
+`restart: unless-stopped` relance automatiquement un conteneur qui plante, sauf s'il a été arrêté volontairement.
+
+### Réseaux
+
+| Réseau | Services | Rôle |
+|---|---|---|
+| `public` | `proxy` | Réseau relié à la machine hôte, utilisé pour publier le port `8080:80`. |
+| `interne` (`internal: true`) | `proxy`, `front`, `back` | Réseau privé sans accès vers l'extérieur. Le front et le back n'y sont joignables que par le proxy. |
+
+Seul le proxy publie un port (`8080:80`). Le front et le back exposent leur port (`80` et `3000`) uniquement sur le réseau interne : depuis la machine hôte, `localhost:3000` n'est pas joignable (vérifié).
+
+**Deux conteneurs sur le port 80 ?** Le front et le proxy écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le proxy est publié (sur `8080`).
