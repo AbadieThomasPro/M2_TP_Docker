@@ -1,5 +1,5 @@
-# Version d'Alpine en ARG pour la changer sur les 3 images depuis .env, sans toucher au Dockerfile
-ARG ALPINE_VERSION=3.20
+# Version d'Alpine en ARG pour la changer sur toutes les images depuis .env, sans toucher au Dockerfile
+ARG ALPINE_VERSION=3.22
 
 # Alpine plutôt que l'image nginx : ~8 Mo, moins de surface d'attaque, et aucune image toute faite du Hub
 FROM alpine:${ALPINE_VERSION}

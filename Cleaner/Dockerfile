@@ -1,5 +1,5 @@
 # Version d'Alpine en ARG, comme les autres images : une seule valeur à changer dans .env
-ARG ALPINE_VERSION=3.20
+ARG ALPINE_VERSION=3.22
 
 # Alpine : son BusyBox fournit déjà sh, date, find, rm et stat, tout ce dont le script a besoin
 FROM alpine:${ALPINE_VERSION}

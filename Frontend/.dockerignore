@@ -1,12 +1,13 @@
-# Contexte de build réduit au strict nécessaire : build plus rapide et rien d'inutile dans l'image
+# Contexte de build réduit au strict nécessaire : build plus rapide et rien d'inutile dans l'image.
+# "**/" obligatoire : un motif simple ne vise que la racine du contexte, pas app/node_modules
 
-# Dépendances locales (Windows) : elles seront installées pour Linux dans l'image
-node_modules
-# Artefacts de build locaux : l'image doit construire les siens
-dist
-.angular
+# Dépendances locales (Windows, plusieurs centaines de Mo) : réinstallées pour Linux par npm ci
+**/node_modules
+# Artefacts de build locaux : l'image construit les siens
+**/dist
+**/.angular
 # Bruit qui n'a rien à faire dans une image
-*.log
+**/*.log
 .git
 # Fichiers de build eux-mêmes : inutiles une fois l'image construite
 Dockerfile

@@ -1,4 +1,4 @@
-// Mini serveur HTTP natif (sans npm) qui sert la page du front
+// Mini serveur HTTP natif (sans npm) : sert l'application Angular compilée et relaie /api vers la gateway
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -7,12 +7,65 @@ const PORT = process.env.PORT || 80;
 const GATEWAY_HOST = process.env.GATEWAY_HOST || 'gateway';
 const GATEWAY_PORT = process.env.GATEWAY_PORT || 80;
 
-// Seuls ces fichiers de src/ sont servis
-const FILES = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/index.html': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
+// Dossier du build Angular (copié depuis le stage de build de l'image)
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const INDEX = path.join(PUBLIC_DIR, 'index.html');
+
+// Types MIME des fichiers produits par le build : sans le bon type, le navigateur refuse les scripts
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.json': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.woff2': 'font/woff2',
 };
+
+// Fichiers avec empreinte (main-AICTWSOV.js) : leur nom change à chaque build, le navigateur peut
+// les garder en cache un an. index.html, lui, doit toujours être revérifié pour pointer vers les bons
+const HASHED = /-[A-Z0-9]{8}\.(js|css)$/;
+
+// Sert un fichier du build. Angular génère des noms imprévisibles (empreintes) : une liste blanche
+// n'est plus possible, on sert donc tout PUBLIC_DIR, en interdisant d'en sortir (../)
+function serveStatic(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { Allow: 'GET, HEAD' });
+    return res.end();
+  }
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch {
+    res.writeHead(400);
+    return res.end('Requête invalide');
+  }
+  const file = path.join(PUBLIC_DIR, path.normalize(urlPath));
+  if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) {
+    res.writeHead(404);
+    return res.end('Not found');
+  }
+  fs.stat(file, (err, stat) => {
+    let target = file;
+    if (err || !stat.isFile()) {
+      // Fichier absent : 404 pour une ressource (.js, .png...), page de l'application sinon
+      if (path.extname(urlPath)) {
+        res.writeHead(404);
+        return res.end('Not found');
+      }
+      target = INDEX;
+    }
+    res.writeHead(200, {
+      'Content-Type': MIME[path.extname(target)] || 'application/octet-stream',
+      'Cache-Control': HASHED.test(target) ? 'public, max-age=31536000, immutable' : 'no-cache',
+    });
+    if (req.method === 'HEAD') return res.end();
+    // Lecture en flux : pas de fichier entier en mémoire
+    fs.createReadStream(target).on('error', () => res.destroy()).pipe(res);
+  });
+}
 
 // En-têtes « hop-by-hop » (RFC 7230) : ils décrivent une connexion, pas le message, et ne doivent
 // pas être recopiés d'un saut à l'autre. Les recopier (chunked, keep-alive) bloquait les clients HTTP/1.0.
@@ -53,20 +106,7 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/')) {
     return relayToGateway(req, res);
   }
-
-  const file = FILES[req.url];
-  if (!file) {
-    res.writeHead(404);
-    return res.end('Not found');
-  }
-  fs.readFile(path.join(__dirname, 'src', file[0]), (err, data) => {
-    if (err) {
-      res.writeHead(500);
-      return res.end('Erreur serveur');
-    }
-    res.writeHead(200, { 'Content-Type': file[1] });
-    res.end(data);
-  });
+  serveStatic(req, res);
 });
 
 server.listen(PORT, () => console.log(`Front en écoute sur le port ${PORT}`));

@@ -1,6 +1,6 @@
-# Version d'Alpine en ARG pour la changer sur les 3 images depuis .env, sans toucher au Dockerfile
+# Version d'Alpine en ARG pour la changer sur toutes les images depuis .env, sans toucher au Dockerfile
 # (déclarée avant le premier FROM : utilisable par les deux stages)
-ARG ALPINE_VERSION=3.20
+ARG ALPINE_VERSION=3.22
 
 # ---------------------------------------------------------------------------
 # Stage 1 "deps" : installe les dépendances npm. Jeté à la fin : npm et son cache

@@ -23,7 +23,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 
 | Dossier | Image | Rôle |
 |---|---|---|
-| `Frontend/` | alpine + nodejs + tini | Sert la page (`src/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
+| `Frontend/` | multi-stage : `build` (alpine + nodejs + npm, `ng build`) puis alpine + nodejs + tini | Sert l'application Angular compilée (`public/`, depuis `app/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health` (et `/api/phrase` tant que le front Hello World l'utilise). Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
@@ -63,7 +63,8 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Commentaires courts, en français.
 
 ### Bonnes pratiques Docker (cours 1)
-- Base `alpine` avec une **version fixée** (ARG `ALPINE_VERSION`), jamais `latest`.
+- Base `alpine` avec une **version fixée** (ARG `ALPINE_VERSION`, actuellement **3.22** : Node 22 requis par Angular 22, 3.20 en fin de support), jamais `latest`.
+- `.dockerignore` : motifs en `**/` (un motif simple ne vise que la racine du contexte).
 - `apk add --no-cache`, chaque paquet justifié. Pas de `npm` dans une image finale (multi-stage si un build est nécessaire).
 - **Utilisateur non-root** (`USER`), fichiers du code laissés à root (lecture seule). **UID explicites** (`adduser -u`) dès que deux images partagent un volume : sinon chacune donne 1000 à son premier utilisateur, et le noyau les confond (back = 1001, cleaner = 1002, groupe `stockage` = `STORAGE_GID`).
 - Ordre des couches : OS, paquets, utilisateur, ARG/ENV en haut ; `COPY` du code **en dernier**.

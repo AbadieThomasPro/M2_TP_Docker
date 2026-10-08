@@ -1,5 +1,5 @@
 # Version d'Alpine en ARG, comme les autres images : une seule valeur à changer dans .env
-ARG ALPINE_VERSION=3.20
+ARG ALPINE_VERSION=3.22
 
 # Alpine plutôt qu'une image de bench toute faite du Hub : contrainte du TP, et ~8 Mo
 FROM alpine:${ALPINE_VERSION}

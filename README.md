@@ -34,7 +34,7 @@ Application **Angular 22** d'une seule page, au design **QuestUI** (thème RPG m
 
 L'application reste volontairement minimale (cours Docker, pas cours web) : un composant, un service d'accès à l'API, et du CSS natif bâti sur des variables (aucune librairie UI). Toutes les couleurs, polices, espacements et ombres sont définis **une seule fois** dans `styles.css`, d'après le design system. Les polices sont chargées par le navigateur depuis Google Fonts : rien n'est ajouté dans les images Docker. Le build de production pèse **150 Ko** (45 Ko compressés).
 
-> Sur cette branche, l'application Angular est prête mais **pas encore servie par l'image Docker du front**, qui sert toujours la page Hello World : c'est l'objet du Lot suivant (Dockerfile multi-stage avec build Angular). En développement : `npx ng serve` dans `Frontend/app/`, qui relaie `/api` vers la stack (`proxy.conf.json`).
+L'application est compilée **dans l'image Docker du front** (build multi-stage, voir [Image Frontend](#image-frontend)) : `docker compose up --build` suffit, aucune installation de Node n'est nécessaire sur la machine. En développement uniquement : `npx ng serve` dans `Frontend/app/`, qui relaie `/api` vers la stack (`proxy.conf.json`).
 
 ### Ce que le sujet permet de montrer avec Docker
 
@@ -60,7 +60,7 @@ L'application reste volontairement minimale (cours Docker, pas cours web) : un c
 | Worker de nettoyage (4e image) : aucun réseau, volume partagé, arrêt propre mesuré | ✅ Fait |
 | Durcissement : systèmes de fichiers en lecture seule (`read_only` + `tmpfs`) | ✅ Fait |
 | Interface web (Angular, design QuestUI) | ✅ Faite (testée avec `ng serve`) |
-| Image front multi-stage servant l'application Angular | ⏳ À faire |
+| Image front multi-stage servant l'application Angular, stack passée en Alpine 3.22 | ✅ Fait |
 | Démonstration du scaling | ⏳ À faire |
 
 ## Architecture actuelle
@@ -227,10 +227,7 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 ├── Frontend/
 │   ├── Dockerfile
 │   ├── server.js        # serveur HTTP Node : sert la page et relaie /api vers la gateway
-│   ├── src/
-│   │   ├── index.html   # page Hello World (servie par l'image jusqu'au passage à Angular)
-│   │   └── app.js
-│   └── app/             # application Angular 22 « Parchemins éphémères »
+│   └── app/             # application Angular 22 « Parchemins éphémères », compilée dans l'image
 │       ├── package.json, package-lock.json, angular.json, tsconfig*.json
 │       ├── proxy.conf.json      # dev : ng serve relaie /api vers la stack (127.0.0.1:8080)
 │       └── src/
@@ -287,7 +284,7 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 
 | ARG | Défaut | Utilisation |
 |---|---|---|
-| `ALPINE_VERSION` | `3.20` | Déclaré **avant** `FROM` pour être utilisable dans `FROM alpine:${ALPINE_VERSION}`. On change la version de l'OS de toutes les images depuis le `.env`, sans toucher aux Dockerfile. |
+| `ALPINE_VERSION` | `3.22` | Déclaré **avant** `FROM` pour être utilisable dans `FROM alpine:${ALPINE_VERSION}`. On change la version de l'OS de toutes les images depuis le `.env`, sans toucher aux Dockerfile. |
 | `PORT` | `80` (front, gateway) / `3000` (back) | Sert à `EXPOSE ${PORT}` et de valeur par défaut à `ENV PORT=${PORT}`. Le port documenté par l'image et le port d'écoute restent ainsi cohérents. |
 
 ### Pourquoi un `.env` ?
@@ -300,42 +297,66 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 
 ## Image Frontend
 
-**Point d'entrée** de l'architecture. Le `server.js` a deux rôles :
+**Point d'entrée** de l'architecture. L'image contient l'application **Angular compilée** (voir [L'interface](#linterface--parchemins-éphémères)) et un petit serveur Node, `server.js`, qui a deux rôles :
 
 | Requête reçue | Traitement |
 |---|---|
-| `/`, `/index.html`, `/app.js` | Fichiers de `src/` servis au navigateur |
 | `/api/...` | Relayée vers `http://${GATEWAY_HOST}:${GATEWAY_PORT}` (la gateway), puis la réponse est renvoyée au navigateur |
-| autre | `404` |
+| Un fichier du build (`/`, `/main-XXXX.js`, `/styles-XXXX.css`, `/favicon.ico`...) | Servi depuis `public/` avec son type MIME |
+| Un chemin sans extension inconnu (`/une/route`) | `index.html` : c'est l'application qui gère ses écrans |
+| Une ressource absente (`/absent.js`) ou un chemin qui sort de `public/` (`/..%2Fserver.js`) | `404` |
+| Autre méthode que `GET` / `HEAD` | `405` |
 
-Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `gateway` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/phrase` sur le front (même origine, pas de CORS), et c'est le front qui contacte la gateway. Si la gateway est injoignable, le front répond `502`.
+Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `gateway` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/files` sur le front (même origine, pas de CORS), et c'est le front qui contacte la gateway. Si la gateway est injoignable, le front répond `502`.
+
+**Pourquoi servir tout `public/` et non une liste de fichiers ?** Angular produit des noms avec **empreinte** (`main-AICTWSOV.js`), qui changent à chaque build : une liste blanche écrite à la main serait fausse au build suivant. Le serveur sert donc tout le dossier `public/`, en vérifiant que le chemin demandé, une fois décodé et normalisé, reste **dans** ce dossier (testé : `..%2Fserver.js` → `404`). `server.js` est rangé à côté de `public/`, jamais dedans : il ne peut pas être téléchargé.
+
+**Cache :** les fichiers à empreinte sont envoyés avec `Cache-Control: max-age=31536000, immutable` (leur contenu ne changera jamais sous ce nom), et `index.html` avec `no-cache` (il doit toujours être revérifié pour pointer vers les bons fichiers après un nouveau build).
 
 Le relais transmet le corps des requêtes en flux, ce qui convient aux uploads. Si la gateway répond avant la fin de l'envoi (par exemple `413` pour un fichier trop gros), le front lit le reste du corps sans le transmettre : sans ça, le client restait bloqué à attendre de finir son envoi (bug trouvé et corrigé en testant la limite d'upload).
 
-### Fichiers communs aux 3 images
+### Fichiers communs à toutes les images
 
 | Fichier / instruction | Justification |
 |---|---|
-| `.dockerignore` | Le contexte de build ne contient que l'utile : build plus rapide, et pas de `node_modules` Windows, de `.git` ni de logs dans l'image (bonne pratique du cours). |
+| `.dockerignore` | Le contexte de build ne contient que l'utile : build plus rapide, et pas de `node_modules` Windows, de `.git` ni de logs dans l'image (bonne pratique du cours). Les motifs sont écrits **`**/node_modules`** : un motif simple ne vise que la racine du contexte, et le `Frontend/app/node_modules` local (plusieurs centaines de Mo) aurait été envoyé à Docker à chaque build. |
 | `LABEL org.opencontainers.image.*` | Métadonnées au format standard OCI (titre, description, auteur, dépôt), lisibles avec `docker inspect` : l'image se décrit elle-même. |
 
-### Image de base
+### Image de base : build multi-stage
+
+```
+Stage "build" : alpine + nodejs + npm ──▶ npm ci ──▶ ng build ──▶ dist/cloud-front/browser
+                                                                        │ COPY --from=build
+Stage final   : alpine + nodejs + tini + tzdata + server.js ◀───────────┘   (ni npm, ni node_modules, ni sources)
+```
 
 | Choix | Justification |
 |---|---|
-| `alpine:3.20` | OS minimal (~8 Mo) : surface d'attaque réduite et image légère. On n'utilise pas l'image officielle `node` : Node est installé nous-mêmes. |
-| Version fixée (`3.20`) plutôt que `latest` | Build reproductible : la même version d'OS et de Node à chaque build, pas de changement surprise. La version est passée par l'ARG `ALPINE_VERSION`. |
-| Ordre des instructions | Ce qui change rarement en haut (OS, paquets, utilisateur, variables), le code (`COPY`) en bas. Modifier le code ne reconstruit que les dernières couches : les couches au-dessus restent en cache. |
+| `alpine:3.22` | OS minimal (~8 Mo) : surface d'attaque réduite et image légère. On n'utilise pas l'image officielle `node` : Node est installé nous-mêmes. |
+| **3.22** plutôt que 3.20 | Angular 22 exige Node **≥ 22.22**, et Alpine 3.20 ne fournit que Node 20.15 : impossible de compiler l'application. De plus, Alpine 3.20 et Node 20 sont **en fin de support** depuis avril 2026. Alpine 3.22 fournit Node 22 (LTS, maintenu) et est supporté jusqu'en 2027. Changement fait en une ligne, `ALPINE_VERSION` dans le `.env`, pour **toutes** les images. |
+| Version fixée plutôt que `latest` | Build reproductible : la même version d'OS et de Node à chaque build, pas de changement surprise. |
+| **Multi-stage** | Compiler Angular demande npm, la CLI Angular, TypeScript et ~300 Mo de dépendances, qui n'ont rien à faire dans l'image livrée : on ne sert que le résultat (HTML, JS, CSS). Le stage `build` est jeté à la fin. |
+| `COPY package.json package-lock.json` **avant** les sources | La couche `npm ci` (la plus longue) reste en cache tant que les dépendances ne changent pas. Vérifié : après la modification d'un composant, `npm ci` est `CACHED`, seul `ng build` est relancé. |
+| `npm ci` (avec les dépendances de dev) | Versions exactes du `package-lock.json`. Les dépendances de dev (CLI, compilateur) sont nécessaires pour compiler : c'est le stage jetable qui les porte. |
+| `NG_CLI_ANALYTICS=false` (stage build) | Évite que la CLI Angular pose sa question sur la télémétrie pendant un build automatique. |
+| Ordre des instructions | Ce qui change rarement en haut (OS, paquets, utilisateur, variables), le build de l'application en bas. |
 
-Pas de **multi-stage build** : il n'y a aucune étape de compilation (pas de TypeScript, pas de bundler, pas de `npm install`). Un stage de build n'apporterait rien.
+**Tailles mesurées :**
+
+| Image | Taille |
+|---|---|
+| Stage `build` (Node, npm, dépendances, sources) | 559 Mo |
+| **Image finale du front** | **114 Mo** |
+
+445 Mo ne partent jamais en production. Vérifié dans l'image finale : `npm absent`, `node_modules absent`, aucune source TypeScript ; `/app` ne contient que `server.js` et `public/` (`index.html`, `main-*.js`, `styles-*.css`, `favicon.ico`). Durée du build complet : 33 s (`npm ci` 14,5 s, `ng build` 5,5 s).
 
 ### Dépendances installées
 
-Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index des paquets dans l'image, ce qui l'allège).
-
-| Dépendance | Rôle | Pourquoi ce choix |
-|---|---|---|
-| `nodejs` | Exécute `server.js`, qui distribue la page et relaie `/api` | Seul le runtime est installé, sans `npm` : le serveur et le relais utilisent uniquement le module natif `http`, donc aucune librairie externe n'est nécessaire. |
+| Où | Dépendance | Rôle | Pourquoi ce choix |
+|---|---|---|---|
+| Stage `build` (`apk`) | `nodejs`, `npm` | Installer les paquets et compiler Angular | Restent dans le stage jetable. |
+| Stage `build` (npm) | Angular 22 (`@angular/core`, `common`, `compiler`, `platform-browser`, `build`, `cli`...), `rxjs`, `typescript` | Framework et outils de compilation | Projet allégé : sans `@angular/router` ni `@angular/forms` (une seule page, pas de formulaire complexe), sans outils de test. |
+| Image finale (`apk`) | `nodejs` | Exécute `server.js`, qui sert le build et relaie `/api` | Seul le runtime est installé, sans `npm` : le serveur utilise uniquement les modules natifs `http`, `fs` et `path`, et l'application est déjà compilée. |
 | `tini` | Init minimal lancé en PID 1 | Transmet correctement les signaux (SIGTERM lors d'un `docker stop`) à Node et nettoie les processus zombies. Sans lui, Node en PID 1 peut ignorer SIGTERM et le conteneur est tué brutalement après 10 s. |
 | `tzdata` | Base des fuseaux horaires | Permet d'avoir l'heure de Paris (`TZ=Europe/Paris`) dans les logs au lieu de l'UTC. |
 
@@ -348,7 +369,8 @@ Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index 
 | `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur (s'appuie sur `tzdata`). |
 | `RUN adduser -D -H front` | Crée un utilisateur `front` sans mot de passe (`-D`) ni dossier personnel (`-H`). Le serveur tourne avec cet utilisateur et non en root : en cas de faille, l'attaquant n'a pas les droits root dans le conteneur. |
 | `WORKDIR /app` | Dossier de travail de l'application. |
-| `COPY server.js ./` et `COPY src/ ./src/` | Les fichiers appartiennent à root : l'utilisateur `front` peut les lire mais pas les modifier. `server.js` reste en dehors de `src/` pour ne jamais être servi au navigateur. |
+| `COPY server.js ./` | Le serveur, qui appartient à root : `front` peut le lire mais pas le modifier. |
+| `COPY --from=build /build/dist/cloud-front/browser ./public/` | Récupère **seulement** le résultat du build Angular. `server.js` reste en dehors de `public/` pour ne jamais être servi au navigateur. Copié en dernier : c'est ce qui change le plus souvent. |
 | `USER front` | Bascule sur l'utilisateur non-root pour l'exécution. |
 
 ### Ports exposés
@@ -363,7 +385,7 @@ Installées via `apk add --no-cache` (`--no-cache` : on ne conserve pas l'index 
 
 | ARG | Défaut | Rôle |
 |---|---|---|
-| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
 | `PORT` | `80` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
 
 ### Arguments attendus au run (ENV)
@@ -449,7 +471,7 @@ Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui
 
 ### Image de base : build multi-stage
 
-Même base que le Frontend (`alpine:3.20`, version fixée, Node installé par nos soins), mais en **deux stages** :
+Même base que le Frontend (`alpine:3.22`, version fixée, Node installé par nos soins), mais en **deux stages** :
 
 ```
 Stage "deps"  : alpine + nodejs + npm ──▶ npm ci --omit=dev ──▶ node_modules
@@ -468,9 +490,11 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 
 | Image | Taille | Commentaire |
 |---|---|---|
-| Version Hello World (`main`, Node natif, aucune dépendance) | 91,8 Mo | Référence : l'essentiel du poids vient de `nodejs` |
-| Stage `deps` (avec npm) | 116 Mo | Ce que serait l'image sans multi-stage |
-| **Image finale multi-stage** | **97,9 Mo** | 18 Mo de moins que sans multi-stage ; Express + multer n'ajoutent qu'environ 6 Mo |
+| Image | Alpine 3.20 / Node 20 | **Alpine 3.22 / Node 22 (actuel)** | Commentaire |
+|---|---|---|---|
+| Version Hello World (Node natif, aucune dépendance) | 91,8 Mo | – | Référence : l'essentiel du poids vient de `nodejs` |
+| Stage `deps` (avec npm) | 116 Mo | 139 Mo | Ce que serait l'image sans multi-stage |
+| **Image finale multi-stage** | 97,9 Mo | **120 Mo** | 19 Mo de moins que sans multi-stage ; Express + multer n'ajoutent qu'environ 6 Mo. Node 22 pèse environ 22 Mo de plus que Node 20 : c'est le prix d'un runtime encore maintenu |
 
 ### Dépendances installées
 
@@ -508,7 +532,7 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 
 | ARG | Défaut | Rôle |
 |---|---|---|
-| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
 | `PORT` | `3000` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
 | `STORAGE_GID` | `1500` | GID du groupe `stockage`, partagé avec le worker de nettoyage. Fourni par le `.env` aux deux images : une seule valeur, donc toujours identique. |
 
@@ -588,7 +612,7 @@ La gateway isole le back : le front ne connaît que l'adresse `gateway`, pas cel
 
 ### Image de base
 
-`alpine:3.20`, comme les autres images. On n'utilise pas l'image officielle `nginx` : nginx est installé par nos soins depuis les paquets Alpine.
+`alpine:3.22`, comme les autres images. On n'utilise pas l'image officielle `nginx` : nginx est installé par nos soins depuis les paquets Alpine.
 
 ### Dépendances installées
 
@@ -623,7 +647,7 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 
 | ARG | Défaut | Rôle |
 |---|---|---|
-| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
 | `PORT` | `80` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
 
 ### Arguments attendus au run (ENV)
@@ -696,7 +720,7 @@ Ce n'est pas un serveur : pas de port, pas de réseau, et un healthcheck qui ne 
 
 | Choix | Justification |
 |---|---|
-| `alpine:3.20`, **sans aucun paquet ajouté** | Le BusyBox d'Alpine fournit déjà tout ce dont le script a besoin : `sh`, `ls`, `awk`, `xargs`, `rm`, `find`, `stat`, `setsid`. Ajouter Node ou Python pour une boucle de quelques lignes alourdirait l'image et la surface d'attaque sans rien apporter. |
+| `alpine:3.22`, **sans aucun paquet ajouté** | Le BusyBox d'Alpine fournit déjà tout ce dont le script a besoin : `sh`, `ls`, `awk`, `xargs`, `rm`, `find`, `stat`, `setsid`. Ajouter Node ou Python pour une boucle de quelques lignes alourdirait l'image et la surface d'attaque sans rien apporter. |
 | Script shell plutôt qu'application | Le travail consiste à lister, filtrer et supprimer des fichiers : exactement ce que font les outils Unix de base. |
 
 ### Dépendances installées
@@ -721,7 +745,7 @@ Aucun port : le worker n'écoute rien et ne contacte personne. Dans le compose, 
 
 | ARG | Défaut | Rôle |
 |---|---|---|
-| `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
 | `STORAGE_GID` | `1500` | GID du groupe `stockage`. Doit être identique à celui du back : une seule valeur dans le `.env`, passée aux deux images. |
 
 ### Arguments attendus au run (ENV)
@@ -849,6 +873,8 @@ Valeurs retenues, justifiées par le benchmark ci-dessous :
 ### Benchmark : comment les limites ont été choisies
 
 Les limites ne sont pas fixées au hasard : elles sont dimensionnées à partir de **mesures sous charge**, faites avec un outil construit pour l'occasion.
+
+> **À refaire avec l'application finale.** Les mesures détaillées ci-dessous ont été faites sur la version Hello World (API en Node natif, Alpine 3.20 / Node 20). Une première mesure après le passage à **Express** et à **Node 22** montre que le dosage a changé : à 50 requêtes en parallèle, 368 req/s au lieu de 634, et c'est maintenant le **back** qui plafonne à sa limite de 0,25 CPU (~0,7 ms de CPU par requête au lieu de ~0,36). La mémoire reste loin des plafonds (back ~28 Mo sur 128, gateway ~6 Mo sur 32). Les limites CPU seront rééquilibrées avec un benchmark complet, envois de fichiers compris.
 
 #### Outil de mesure
 
