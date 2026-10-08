@@ -71,6 +71,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Arrêt propre : l'application gère SIGTERM (nginx : `STOPSIGNAL SIGQUIT`). Objectif : `docker stop` en moins d'1 s.
 - `HEALTHCHECK` sur chaque image (`127.0.0.1` pour nginx, qui n'écoute qu'en IPv4). Le compose utilise `depends_on: condition: service_healthy`.
 - `.dockerignore` et `LABEL org.opencontainers.image.*` sur chaque image.
+- **`read_only: true` sur tous les services.** Un service qui écrit reçoit le volume ou un `tmpfs` **limité en taille** (compté dans sa mémoire). nginx ne doit rien bufferiser sur disque (`proxy_request_buffering off`, `proxy_max_temp_file_size 0`).
 - `EXPOSE` documente, seul `ports:` publie. Seul le front publie un port.
 
 ### Ressources

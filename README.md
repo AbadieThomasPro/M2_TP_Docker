@@ -40,7 +40,7 @@ Le sujet de départ, un cloud de stockage générique, a été **affiné après 
 | Gateway : envois en flux, découverte des instances du back (`resolver`) | ✅ Fait |
 | Durée de vie des fichiers, quota, envois atomiques | ✅ Fait |
 | Worker de nettoyage (4e image) : aucun réseau, volume partagé, arrêt propre mesuré | ✅ Fait |
-| Durcissement : systèmes de fichiers en lecture seule | ⏳ À faire |
+| Durcissement : systèmes de fichiers en lecture seule (`read_only` + `tmpfs`) | ✅ Fait |
 | Interface web (Angular) | ⏳ À faire |
 | Démonstration du scaling | ⏳ À faire |
 
@@ -551,6 +551,7 @@ La gateway isole le back : le front ne connaît que l'adresse `gateway`, pas cel
 | `proxy_request_buffering off` | Par défaut, nginx **reçoit l'envoi en entier** dans un fichier temporaire avant de le transmettre au back : double écriture disque, attente avant que le back ne commence, et un `/tmp` assez grand pour 50 Mo par envoi simultané. Désactivé, l'envoi est transmis au back **au fil de l'eau** et écrit une seule fois, dans le volume. | Envoi de 40 Mo ralenti à 4 Mo/s, en regardant les fichiers ouverts par nginx (`/proc/*/fd`, car nginx supprime son fichier temporaire de l'arborescence tout en le gardant ouvert) : **1 fichier temporaire** avec la mise en tampon par défaut, **0** avec notre réglage. |
 | `proxy_http_version 1.1` + `Connection ""` | Sans mise en tampon, nginx doit pouvoir transmettre un corps envoyé par morceaux (`chunked`), ce qui n'existe qu'en HTTP/1.1. Par défaut, nginx parle HTTP/1.0 au back. | Envois de 40 Mo → `201`. |
 | `client_max_body_size ${MAX_UPLOAD_MB}m` | Inchangé : le refus (`413`) reste fait par nginx **avant** que le corps n'atteigne le back. | Envoi de 60 Mo (limite 50) → `413`. |
+| `proxy_max_temp_file_size 0` | Par défaut, quand le back envoie plus vite que le client ne télécharge, nginx stocke la différence **sur disque** (jusqu'à 1 Go). Avec un `/tmp` en lecture seule hormis un `tmpfs` de 8 Mo, ce stockage déborde. Avec `0`, nginx relaie au rythme du client, sans fichier temporaire. | **Avant** : téléchargement de 40 Mo à 2 Mo/s **coupé à 7 Mo**, avec un `200` côté client (échec silencieux) et `No space left on device` dans les logs nginx. **Après** : 40 Mo reçus en entier, `/tmp` vide, gateway à 9,8 Mo de mémoire. |
 | `resolver 127.0.0.11 valid=10s ipv6=off` | Le DNS interne de Docker est interrogé toutes les 10 s au plus, au lieu d'une seule fois au démarrage : les instances du back ajoutées ou retirées par `docker compose up --scale back=N` sont prises en compte **sans redémarrer nginx**. `ipv6=off` : nos réseaux sont en IPv4, inutile d'attendre des réponses AAAA. | `--scale back=3` : les 3 instances répondent à tour de rôle (`X-Served-By` différent), et la gateway n'a pas été redémarrée. Retour à 1 instance → `200`. |
 | `set $back_upstream ...` + `proxy_pass $back_upstream` | Une adresse écrite en dur dans `proxy_pass` est résolue une seule fois, au démarrage. Passer par une variable oblige nginx à utiliser le `resolver` à chaque requête. | Idem. |
 
@@ -976,6 +977,34 @@ volumes:
 **Attention :** Docker ne recopie le contenu et les droits du dossier de l'image que dans un volume **vide**. Après un changement des droits dans le Dockerfile (comme l'ajout du groupe `stockage`), un volume existant garde les anciens droits : il faut le recréer avec `docker compose down -v`.
 
 Commandes utiles : `docker volume inspect docker-cloud_stockage` (emplacement sur l'hôte Docker), `docker compose exec back ls -l /data/files`.
+
+### Durcissement : systèmes de fichiers en lecture seule
+
+Tous les services tournent avec **`read_only: true`** : le système de fichiers de leur image ne peut pas être modifié pendant l'exécution. Même en cas de faille dans une application, un attaquant ne peut ni modifier le code, ni déposer un binaire ou un script, ni altérer la configuration.
+
+Un service qui a besoin d'écrire reçoit seulement ce qu'il lui faut :
+
+| Service | Où il peut écrire | Pourquoi |
+|---|---|---|
+| `front` | Nulle part | Il lit ses fichiers et relaie les requêtes, rien d'autre. |
+| `back` | Le volume `/data` uniquement | Les envois arrivent directement dans le volume (`.incoming/`, puis renommage). |
+| `gateway` | `tmpfs` **`/tmp`** de 8 Mo (`GATEWAY_TMPFS_SIZE`) | Config générée au démarrage, PID, dossiers temporaires de nginx. Contenu réel : quelques Ko. |
+| `cleaner` | Le volume `/data` + `tmpfs` **`/tmp`** de 1 Mo | Suppressions dans le volume, fichier de heartbeat pour le healthcheck. |
+| `bench` | Nulle part | `ab` n'écrit rien. |
+
+**Pourquoi des `tmpfs` si petits ?** Un `tmpfs` est stocké en RAM et **compté dans la limite mémoire** du conteneur (32 Mo pour la gateway). Le limiter évite qu'un remplissage de `/tmp` consomme toute la mémoire du service. C'est aussi ce qui a imposé de ne laisser nginx bufferiser **ni les envois** (`proxy_request_buffering off`) **ni les téléchargements** (`proxy_max_temp_file_size 0`) sur disque : sans ce second réglage, un téléchargement de 40 Mo était coupé à 7 Mo (voir [Image Gateway](#envois-de-fichiers-et-scaling)).
+
+**Vérifications :**
+
+| Test | Résultat |
+|---|---|
+| `touch` dans `/app` (front, back), `/etc/nginx` (gateway), `/` (cleaner) | `Read-only file system` pour les 4 |
+| `HostConfig.ReadonlyRootfs` | `true` pour les 4 services |
+| Config nginx générée dans `/tmp` | Présente (`nginx.conf`, `nginx.pid`...) |
+| Envoi puis téléchargement lent de 40 Mo | Complet, `/tmp` reste vide |
+| `docker compose run --rm gateway nginx -t` | Fonctionne toujours (le `tmpfs` est aussi monté pour un `run`) |
+| Bench (500 requêtes) | 0 échec |
+| Arrêt | Code `0` pour les 4 services |
 
 ### Réseaux
 

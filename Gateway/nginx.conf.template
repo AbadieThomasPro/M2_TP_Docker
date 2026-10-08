@@ -50,6 +50,10 @@ http {
             # Envoi transmis au back au fil de l'eau au lieu d'être d'abord écrit en entier dans /tmp :
             # pas de copie disque en double, et /tmp peut rester un petit tmpfs en RAM
             proxy_request_buffering off;
+            # Pas de tampon disque pour les réponses : sinon un téléchargement plus rapide côté back que
+            # côté client est stocké dans /tmp (tmpfs de 8 Mo en lecture seule) et coupé quand il est plein
+            # (constaté : 7 Mo reçus sur 40, "No space left on device"). nginx relaie alors au rythme du client
+            proxy_max_temp_file_size 0;
             # HTTP/1.1 vers le back : nécessaire pour transmettre en flux un corps envoyé par morceaux (chunked)
             proxy_http_version 1.1;
             proxy_set_header Connection "";

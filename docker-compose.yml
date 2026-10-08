@@ -40,6 +40,9 @@ services:
     # Swap égal à la limite = pas de swap : sinon Docker double la limite en swap et le service
     # ralentit au lieu d'être arrêté (mesuré : MemorySwap = 2x la limite par défaut)
     memswap_limit: ${BACK_MEMORY}
+    # Système de fichiers de l'image en lecture seule : en cas de faille, impossible de modifier le code
+    # ou de déposer un binaire. Le back n'écrit que dans le volume (envois compris, via .incoming/)
+    read_only: true
     # 10 s : largement au-dessus du temps d'arrêt mesuré (< 1 s) avant le SIGKILL
     stop_grace_period: 10s
     # Relance après un crash, mais respecte un arrêt volontaire
@@ -114,6 +117,11 @@ services:
         reservations:
           memory: ${GATEWAY_MEMORY_RESERVATION}
     memswap_limit: ${GATEWAY_MEMORY}   # pas de swap, comme le back
+    # Lecture seule, comme le back. nginx doit pourtant écrire : config générée, PID, fichiers temporaires
+    read_only: true
+    # ... d'où un /tmp en RAM, limité car il compte dans la mémoire du conteneur (32 Mo)
+    tmpfs:
+      - /tmp:size=${GATEWAY_TMPFS_SIZE}
     stop_grace_period: 10s
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
@@ -149,6 +157,8 @@ services:
         reservations:
           memory: ${FRONT_MEMORY_RESERVATION}
     memswap_limit: ${FRONT_MEMORY}     # pas de swap, comme le back
+    # Lecture seule : le front ne fait que lire ses fichiers et relayer, il n'écrit nulle part
+    read_only: true
     stop_grace_period: 10s
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
@@ -176,6 +186,7 @@ services:
           cpus: "${BENCH_CPUS}"
           memory: ${BENCH_MEMORY}
     memswap_limit: ${BENCH_MEMORY}     # pas de swap, comme les autres services
+    read_only: true                    # ab n'écrit rien : même règle que les autres services
     # Réseau public seulement : il attaque le front comme un vrai client, sans raccourci vers la gateway ou le back
     networks:
       - public
@@ -192,5 +203,5 @@ networks:
     internal: true
 
 volumes:
-  # Fichiers du cloud : seul le back y accède, ils survivent à down et aux rebuilds (supprimés par down -v)
+  # Fichiers du cloud : le back écrit, le cleaner supprime ; ils survivent à down et aux rebuilds (supprimés par down -v)
   stockage:
