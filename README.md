@@ -176,8 +176,10 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 │       └── app.js       # JS client : récupère et affiche la phrase
 ├── Backend/
 │   ├── Dockerfile
+│   ├── package.json     # dépendances : express, multer
+│   ├── package-lock.json
 │   └── src/
-│       └── server.js    # API HTTP Node qui renvoie une phrase
+│       └── server.js    # API Express : fichiers (liste, envoi, téléchargement, suppression)
 ├── Gateway/
 │   ├── Dockerfile
 │   ├── nginx.conf.template  # config nginx avec ${VARIABLES} remplacées au démarrage
@@ -190,6 +192,7 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 ├── docker-compose.yml       # orchestration des 3 conteneurs
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
+├── .gitignore               # node_modules, builds Angular, logs
 ├── AGENTS.md                # règles du projet pour les agents IA (CLAUDE.md l'importe)
 ├── questui-DESIGN.md        # design system de l'interface (thème RPG médiéval)
 └── README.md
@@ -344,15 +347,33 @@ Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucune gat
 
 ## Image Backend
 
-Petite API HTTP qui renvoie une phrase en JSON. Le front la récupère en passant par la gateway.
+API du mini cloud de stockage, en **Express + multer**. Elle lit et écrit les fichiers directement dans `STORAGE_DIR` (le volume `stockage`), sans base de données. Le front l'appelle en passant par la gateway.
 
 ### Routes
 
 | Route | Réponse |
 |---|---|
-| `GET /api/phrase` | `{"phrase": "..."}` : la phrase à afficher dans le front |
+| `GET /api/files` | `200` : liste `[{ name, originalName, size, date }]`, du plus récent au plus ancien |
+| `POST /api/files` | Envoi d'un fichier (multipart, champ `file`) : `201` `{ name, originalName, size }` ; `400` sans fichier ; `413` au-delà de `MAX_UPLOAD_MB` |
+| `GET /api/files/:name` | `200` : téléchargement sous le nom d'origine ; `404` si absent |
+| `DELETE /api/files/:name` | `204` ; `404` si absent |
+| `GET /api/phrase` | `{"phrase": "..."}` : route de la version Hello World, gardée tant que le front l'utilise |
 | `GET /health` | `OK` : utilisée par le healthcheck |
 | Toute autre route | `404` avec `{"error": "Not found"}` |
+
+Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui a répondu : il servira à montrer la répartition de charge quand le back sera lancé en plusieurs instances.
+
+### Choix de l'API
+
+| Choix | Justification |
+|---|---|
+| Express + multer | Express route les requêtes en quelques lignes ; multer gère le format multipart des envois, pénible à décoder à la main. Ce sont les deux seules dépendances. |
+| Stockage sur disque (`multer.diskStorage`) | Le fichier est écrit **en flux** dans le volume : un fichier de 50 Mo ne passe jamais entièrement en mémoire. Cela compte avec une limite de 128 Mo par conteneur. |
+| Nom stocké = `<horodatage>-<aléatoire>__<nom d'origine>` | Deux envois du même nom, ou deux instances du back qui écrivent en même temps, n'écrasent rien. Le nom d'origine est retrouvé pour le téléchargement. |
+| Nom d'origine nettoyé | Seuls lettres (accents compris), chiffres, espaces et `. _ -` sont gardés : pas de chemin ni de caractère spécial dans le volume. |
+| Contrôle du `:name` demandé | `path.basename` doit être identique au nom, et les noms cachés (`.xxx`) sont refusés : `../` ou `%2F` ne permettent pas de sortir du dossier de stockage (testé : `404`). |
+| `MAX_UPLOAD_MB` aussi dans le back | Même limite que la gateway : une double sécurité si le back est appelé sans elle. Un envoi refusé ne laisse aucun fichier partiel (testé). |
+| Erreurs : `413` pour un fichier trop gros, sinon `500` générique | Le détail technique reste dans les logs et n'est pas exposé au client. |
 
 ### Image de base
 
