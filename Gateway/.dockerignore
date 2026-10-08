@@ -1,0 +1,7 @@
+# Contexte de build réduit au strict nécessaire : seuls le modèle de config et le script sont utiles
+
+*.log
+.git
+# Fichiers de build eux-mêmes : inutiles une fois l'image construite
+Dockerfile
+.dockerignore

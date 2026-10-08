@@ -4,6 +4,12 @@ ARG ALPINE_VERSION=3.20
 # Alpine plutôt que l'image node : ~8 Mo, moins de surface d'attaque, et aucune image toute faite du Hub
 FROM alpine:${ALPINE_VERSION}
 
+# Métadonnées au format standard OCI : l'image se décrit elle-même dans docker inspect
+LABEL org.opencontainers.image.title="docker-cloud-front" \
+      org.opencontainers.image.description="Front du mini cloud de stockage : sert la page et relaie /api vers la gateway" \
+      org.opencontainers.image.authors="Thomas Abadie" \
+      org.opencontainers.image.source="https://github.com/AbadieThomasPro/M2_TP_Docker"
+
 # nodejs sans npm : le serveur n'utilise que des modules natifs
 # tini : Node en PID 1 ignore SIGTERM, tini le relaie (sinon SIGKILL après 10 s)
 # tzdata : logs à l'heure de Paris plutôt qu'en UTC
@@ -17,9 +23,10 @@ RUN adduser -D -H front
 ARG PORT=80
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
+# NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
-    NODE_MAX_MEMORY=128 \
+    NODE_OPTIONS="--max-old-space-size=128" \
     GATEWAY_HOST=gateway \
     GATEWAY_PORT=80
 
@@ -44,5 +51,5 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
 # tini en PID 1 pour relayer les signaux et nettoyer les processus zombies
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# sh -c pour lire NODE_MAX_MEMORY ; exec pour que Node remplace le shell et reçoive SIGTERM
-CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_MAX_MEMORY} server.js"]
+# Forme exec sans shell : Node est lancé directement par tini et reçoit SIGTERM
+CMD ["node", "server.js"]

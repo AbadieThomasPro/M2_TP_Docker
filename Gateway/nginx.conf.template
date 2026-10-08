@@ -22,6 +22,9 @@ http {
     uwsgi_temp_path       /tmp/uwsgi;
     scgi_temp_path        /tmp/scgi;
 
+    # Taille max d'upload réglée au run : un fichier trop gros est refusé (413) sans charger le back
+    client_max_body_size ${MAX_UPLOAD_MB}m;
+
     server {
         listen ${PORT};
 

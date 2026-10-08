@@ -15,7 +15,8 @@ services:
     # Surcharge des ENV au run : changer un réglage ne demande pas de rebuild
     environment:
       PORT: ${BACK_PORT}
-      NODE_MAX_MEMORY: ${BACK_NODE_MAX_MEMORY}   # sous la limite mémoire : Node libère avant d'être tué (OOM)
+      # Tas Node sous la limite mémoire : Node libère avant d'être tué (OOM)
+      NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
       PHRASE: ${BACK_PHRASE}
       TZ: ${TZ}
     # Plafond pour qu'un service ne prive pas les autres de ressources ; minimum garanti en réservation
@@ -47,6 +48,7 @@ services:
       WORKER_CONNECTIONS: ${GATEWAY_WORKER_CONNECTIONS}
       BACK_HOST: back                 # nom du service : résolu par le DNS Docker, pas d'IP en dur
       BACK_PORT: ${BACK_PORT}         # même variable que le back : les deux restent cohérents
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
       TZ: ${TZ}
     # nginx refuse de démarrer s'il ne peut pas résoudre "back" : on attend qu'il soit prêt
     depends_on:
@@ -74,7 +76,7 @@ services:
     image: docker-cloud/front
     environment:
       PORT: ${FRONT_PORT}
-      NODE_MAX_MEMORY: ${FRONT_NODE_MAX_MEMORY}
+      NODE_OPTIONS: --max-old-space-size=${FRONT_NODE_MAX_MEMORY}
       GATEWAY_HOST: gateway           # nom du service : résolu par le DNS Docker, pas d'IP en dur
       GATEWAY_PORT: ${GATEWAY_PORT}
       TZ: ${TZ}

@@ -1,0 +1,13 @@
+# Contexte de build réduit au strict nécessaire : build plus rapide et rien d'inutile dans l'image
+
+# Dépendances locales (Windows) : elles seront installées pour Linux dans l'image
+node_modules
+# Artefacts de build locaux : l'image doit construire les siens
+dist
+.angular
+# Bruit qui n'a rien à faire dans une image
+*.log
+.git
+# Fichiers de build eux-mêmes : inutiles une fois l'image construite
+Dockerfile
+.dockerignore

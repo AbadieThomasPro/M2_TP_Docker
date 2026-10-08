@@ -4,6 +4,12 @@ ARG ALPINE_VERSION=3.20
 # Alpine plutôt que l'image node : ~8 Mo, moins de surface d'attaque, et aucune image toute faite du Hub
 FROM alpine:${ALPINE_VERSION}
 
+# Métadonnées au format standard OCI : l'image se décrit elle-même dans docker inspect
+LABEL org.opencontainers.image.title="docker-cloud-back" \
+      org.opencontainers.image.description="API du mini cloud de stockage" \
+      org.opencontainers.image.authors="Thomas Abadie" \
+      org.opencontainers.image.source="https://github.com/AbadieThomasPro/M2_TP_Docker"
+
 # nodejs sans npm : l'API n'utilise que des modules natifs (pas d'Express)
 # tini : Node en PID 1 ignore SIGTERM, tini le relaie (sinon SIGKILL après 10 s)
 # tzdata : logs à l'heure de Paris plutôt qu'en UTC
@@ -17,10 +23,11 @@ RUN adduser -D -H back
 ARG PORT=3000
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
-# (PHRASE en ENV : changer la réponse de l'API ne demande pas de rebuild)
+# NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire
+# PHRASE en ENV : changer la réponse de l'API ne demande pas de rebuild
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
-    NODE_MAX_MEMORY=128 \
+    NODE_OPTIONS="--max-old-space-size=128" \
     PHRASE="Hello World depuis le back !"
 
 # Indique à l'utilisateur de l'image le port de l'API
@@ -43,5 +50,5 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
 # tini en PID 1 pour relayer les signaux et nettoyer les processus zombies
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# sh -c pour lire NODE_MAX_MEMORY ; exec pour que Node remplace le shell et reçoive SIGTERM
-CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_MAX_MEMORY} src/server.js"]
+# Forme exec sans shell : Node est lancé directement par tini et reçoit SIGTERM
+CMD ["node", "src/server.js"]

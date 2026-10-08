@@ -21,9 +21,17 @@ function relayToGateway(req, res) {
     (gatewayRes) => {
       res.writeHead(gatewayRes.statusCode, gatewayRes.headers);
       gatewayRes.pipe(res);
+      // La gateway peut répondre avant la fin de l'envoi (ex. 413 fichier trop gros) :
+      // on lit le reste du corps sans le transmettre, sinon le client reste bloqué
+      gatewayRes.on('end', () => {
+        req.unpipe(gatewayReq);
+        req.resume();
+      });
     }
   );
   gatewayReq.on('error', () => {
+    // Si la réponse a déjà commencé (connexion coupée après un 413), on ne peut plus changer le statut
+    if (res.headersSent) return res.end();
     res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ error: 'Gateway injoignable' }));
   });

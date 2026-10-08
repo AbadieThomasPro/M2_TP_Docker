@@ -4,6 +4,12 @@ ARG ALPINE_VERSION=3.20
 # Alpine plutôt que l'image nginx : ~8 Mo, moins de surface d'attaque, et aucune image toute faite du Hub
 FROM alpine:${ALPINE_VERSION}
 
+# Métadonnées au format standard OCI : l'image se décrit elle-même dans docker inspect
+LABEL org.opencontainers.image.title="docker-cloud-gateway" \
+      org.opencontainers.image.description="Passerelle d'API nginx : seul chemin du front vers le back" \
+      org.opencontainers.image.authors="Thomas Abadie" \
+      org.opencontainers.image.source="https://github.com/AbadieThomasPro/M2_TP_Docker"
+
 # nginx : référence légère pour un reverse proxy, et une autre techno que les images Node
 # gettext-envsubst : seul sous-paquet utile de gettext, pour générer la config au run sans tout installer
 # tzdata : logs à l'heure de Paris plutôt qu'en UTC
@@ -14,12 +20,14 @@ RUN apk add --no-cache nginx gettext-envsubst tzdata
 ARG PORT=80
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
+# MAX_UPLOAD_MB : la gateway refuse les fichiers trop gros avant même qu'ils atteignent le back
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
     WORKER_PROCESSES=1 \
     WORKER_CONNECTIONS=512 \
     BACK_HOST=back \
-    BACK_PORT=3000
+    BACK_PORT=3000 \
+    MAX_UPLOAD_MB=10
 
 # Indique à l'utilisateur de l'image le port de la gateway
 EXPOSE ${PORT}
@@ -39,5 +47,9 @@ STOPSIGNAL SIGQUIT
 HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}/health || exit 1
 
-# Script de démarrage : la config dépend des variables du run, elle ne peut pas être figée au build
+# Script d'init : la config dépend des variables du run, elle ne peut pas être figée au build
 ENTRYPOINT ["/entrypoint.sh"]
+
+# Commande séparée de l'init : remplaçable au run (nginx -t, sh) tout en gardant la config générée
+# daemon off : nginx doit rester au premier plan, sinon le conteneur s'arrête aussitôt
+CMD ["nginx", "-e", "/dev/stderr", "-c", "/tmp/nginx.conf", "-g", "daemon off;"]

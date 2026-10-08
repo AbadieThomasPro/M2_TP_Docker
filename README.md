@@ -185,6 +185,15 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 
 Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de service Docker `gateway` : seul un conteneur du réseau interne le peut. Le navigateur appelle donc `/api/phrase` sur le front (même origine, pas de CORS), et c'est le front qui contacte la gateway. Si la gateway est injoignable, le front répond `502`.
 
+Le relais transmet le corps des requêtes en flux, ce qui convient aux uploads. Si la gateway répond avant la fin de l'envoi (par exemple `413` pour un fichier trop gros), le front lit le reste du corps sans le transmettre : sans ça, le client restait bloqué à attendre de finir son envoi (bug trouvé et corrigé en testant la limite d'upload).
+
+### Fichiers communs aux 3 images
+
+| Fichier / instruction | Justification |
+|---|---|
+| `.dockerignore` | Le contexte de build ne contient que l'utile : build plus rapide, et pas de `node_modules` Windows, de `.git` ni de logs dans l'image (bonne pratique du cours). |
+| `LABEL org.opencontainers.image.*` | Métadonnées au format standard OCI (titre, description, auteur, dépôt), lisibles avec `docker inspect` : l'image se décrit elle-même. |
+
 ### Image de base
 
 | Choix | Justification |
@@ -239,7 +248,7 @@ Variables d'environnement surchargeables avec `-e` ou `environment:` dans le com
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PORT` | `80` (vient de l'ARG) | Port d'écoute du serveur HTTP. |
-| `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`). À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. |
+| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo). Variable lue par Node lui-même : pas besoin de shell dans la `CMD`. À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. Dans le compose, la valeur vient de `FRONT_NODE_MAX_MEMORY`. |
 | `GATEWAY_HOST` | `gateway` | Hôte vers lequel relayer `/api` : le nom du service gateway dans le compose. |
 | `GATEWAY_PORT` | `80` | Port de la gateway. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
@@ -257,12 +266,12 @@ Docker interroge la page toutes les 10 s. Le conteneur passe en `healthy` quand 
 
 ```dockerfile
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_MAX_MEMORY} server.js"]
+CMD ["node", "server.js"]
 ```
 
-- **`ENTRYPOINT` = `tini`** : toujours exécuté en PID 1, il relaie les signaux au processus enfant.
-- **`CMD` via `sh -c`** : nécessaire pour que la variable `${NODE_MAX_MEMORY}` soit remplacée au lancement.
-- **`exec`** : remplace le shell par Node, pour que ce soit Node (et non `sh`) qui reçoive SIGTERM.
+- **`ENTRYPOINT` = `tini`** : toujours exécuté en PID 1, il relaie les signaux à Node et nettoie les processus zombies. Node lancé seul en PID 1 ignore SIGTERM par défaut.
+- **`CMD` en forme exec, sans shell** : Node est lancé directement par `tini` (vérifié avec `ps` : PID 1 = `tini`, son enfant direct = `node`). La limite mémoire passe par `NODE_OPTIONS`, que Node lit tout seul : plus besoin de `sh -c` pour remplacer une variable.
+- **`CMD` séparée de l'`ENTRYPOINT`** : on peut la remplacer au run (`docker run front node -v`) tout en gardant `tini`.
 - **Dans `server.js`** : à la réception de SIGTERM, le serveur arrête d'accepter les connexions, termine celles en cours puis quitte avec le code 0.
 
 Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde, au lieu d'attendre le kill forcé à 10 s.
@@ -271,7 +280,7 @@ Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde,
 
 ```bash
 docker build -t front ./Frontend
-docker run -d --name front -p 8080:80 -e NODE_MAX_MEMORY=128 -e GATEWAY_HOST=gateway --memory=192m --cpus=0.5 front
+docker run -d --name front -p 8080:80 -e NODE_OPTIONS=--max-old-space-size=128 -e GATEWAY_HOST=gateway --memory=192m --cpus=0.5 front
 ```
 
 Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucune gateway n'est joignable : voir la section Orchestration.
@@ -334,7 +343,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
-| `NODE_MAX_MEMORY` | `128` | Mémoire max du tas Node en Mo (`--max-old-space-size`), à aligner sur la limite mémoire du conteneur. |
+| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
 | `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
@@ -351,10 +360,10 @@ Contrairement au front, on interroge une route dédiée `/health` : elle vérifi
 
 ```dockerfile
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["sh", "-c", "exec node --max-old-space-size=${NODE_MAX_MEMORY} src/server.js"]
+CMD ["node", "src/server.js"]
 ```
 
-Même mécanisme que le Frontend : `tini` en PID 1 relaie les signaux, `sh -c` remplace `${NODE_MAX_MEMORY}`, puis `exec` laisse la place à Node. Dans `server.js`, SIGTERM ferme le serveur proprement puis le processus quitte avec le code 0.
+Même mécanisme que le Frontend : `tini` en PID 1 relaie les signaux à Node, lancé en forme exec sans shell. La mémoire est fixée par `NODE_OPTIONS`. Dans `server.js`, SIGTERM ferme le serveur proprement puis le processus quitte avec le code 0.
 
 Résultat testé : `docker stop` arrête le conteneur en moins d'une seconde.
 
@@ -362,7 +371,7 @@ Résultat testé : `docker stop` arrête le conteneur en moins d'une seconde.
 
 ```bash
 docker build -t back ./Backend
-docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NODE_MAX_MEMORY=128 --memory=192m --cpus=0.5 back
+docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NODE_OPTIONS=--max-old-space-size=128 --memory=192m --cpus=0.5 back
 ```
 
 Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back n'est pas publié.
@@ -433,6 +442,7 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 | `WORKER_PROCESSES` | `1` | Nombre de processus workers nginx. À aligner sur le nombre de CPU alloués au conteneur (`cpus:` dans le compose). |
 | `WORKER_CONNECTIONS` | `512` | Connexions simultanées max par worker. Plus la valeur est haute, plus nginx peut consommer de mémoire. |
 | `BACK_HOST` / `BACK_PORT` | `back` / `3000` | Adresse du conteneur back (nom du service dans le compose). |
+| `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un upload (`client_max_body_size`). Un fichier plus gros est refusé par la gateway (`413`) avant d'atteindre le back, ce qui protège sa mémoire et le stockage. Testé : 2 Mo envoyés avec une limite à 1 Mo → `413`. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -451,12 +461,15 @@ On utilise `127.0.0.1` et non `localhost` : dans Alpine, `localhost` se résout 
 ```dockerfile
 STOPSIGNAL SIGQUIT
 ENTRYPOINT ["/entrypoint.sh"]
+CMD ["nginx", "-e", "/dev/stderr", "-c", "/tmp/nginx.conf", "-g", "daemon off;"]
 ```
 
-Le script `entrypoint.sh` fait deux choses :
+C'est le modèle **« wrapper d'init »** du cours : l'`ENTRYPOINT` prépare l'environnement, la `CMD` contient la commande à lancer. Le script `entrypoint.sh` fait deux choses :
 
 1. **Génère la config** : `envsubst` remplace les variables du modèle et écrit `/tmp/nginx.conf`. La liste des variables est donnée explicitement à `envsubst` pour ne pas effacer les variables propres à nginx (`$host`, `$remote_addr`...).
-2. **Lance nginx avec `exec`** : nginx remplace le shell et devient PID 1, il reçoit donc directement les signaux de Docker. `daemon off` le garde au premier plan, sinon le conteneur s'arrêterait aussitôt.
+2. **Lance la `CMD` avec `exec "$@"`** : la commande remplace le shell et devient PID 1, elle reçoit donc directement les signaux de Docker. `daemon off` garde nginx au premier plan, sinon le conteneur s'arrêterait aussitôt.
+
+**Pourquoi séparer la commande du script ?** La `CMD` devient remplaçable au run tout en gardant la config générée. Par exemple, `docker compose run --rm gateway nginx -t -c /tmp/nginx.conf` vérifie la config générée (testé : « syntax is ok »), et `docker compose run --rm gateway sh` ouvre un shell pour déboguer.
 
 **Pourquoi `STOPSIGNAL SIGQUIT` ?** Pour nginx, SIGTERM provoque un arrêt *rapide* qui coupe les connexions en cours, alors que SIGQUIT provoque un arrêt *gracieux* qui termine les requêtes en cours avant de quitter. Avec `STOPSIGNAL`, `docker stop` envoie SIGQUIT au lieu de SIGTERM. Si un SIGTERM est quand même reçu, nginx le gère aussi et s'arrête.
 
@@ -500,9 +513,9 @@ Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .en
 
 | Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
 |---|---|---|---|
-| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_MAX_MEMORY`, `PHRASE`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
-| `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT` |
-| `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_MAX_MEMORY`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
+| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `MAX_UPLOAD_MB`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT`, `MAX_UPLOAD_MB` |
+| `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 
 `ALPINE_VERSION` et `TZ` sont communs à tous les services.
 
@@ -516,7 +529,7 @@ Définie dans `deploy.resources` pour chaque service :
 
 | Service | CPU max | Mémoire max | Mémoire réservée | Justification |
 |---|---|---|---|---|
-| `back` | 0,5 CPU | 192 Mo | 64 Mo | Node consomme environ 10 Mo au repos. `NODE_MAX_MEMORY=128` limite le tas JavaScript : Node libère sa mémoire avant d'atteindre la limite du conteneur. La marge de 64 Mo couvre la mémoire hors tas (runtime, buffers). |
+| `back` | 0,5 CPU | 192 Mo | 64 Mo | Node consomme environ 10 Mo au repos. `NODE_OPTIONS=--max-old-space-size=128` limite le tas JavaScript : Node libère sa mémoire avant d'atteindre la limite du conteneur. La marge de 64 Mo couvre la mémoire hors tas (runtime, buffers). |
 | `front` | 0,5 CPU | 192 Mo | 64 Mo | Même logique que le back. |
 | `gateway` | 0,5 CPU | 64 Mo | 16 Mo | nginx est très léger (environ 2 Mo au repos). Avec `WORKER_PROCESSES=1`, un seul worker suffit pour 0,5 CPU : plus de workers que de CPU n'apporterait rien. |
 
