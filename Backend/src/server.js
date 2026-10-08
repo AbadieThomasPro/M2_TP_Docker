@@ -17,7 +17,6 @@ const TTL_DEFAULT_H = Number(process.env.TTL_DEFAULT_H || 24);
 const TTL_MAX_H = Number(process.env.TTL_MAX_H || 168);
 // 0 = pas de quota
 const STORAGE_QUOTA_MB = Number(process.env.STORAGE_QUOTA_MB || 0);
-const PHRASE = process.env.PHRASE || 'Hello World depuis le back !';
 
 // Durée de vie minimale : en dessous, le fichier expirerait avant même d'être téléchargé
 const TTL_MIN_H = 1 / 60;
@@ -151,9 +150,6 @@ app.delete('/api/files/:name', async (req, res) => {
     throw err;
   }
 });
-
-// Route de démo de la version Hello World, gardée tant que le front l'utilise
-app.get('/api/phrase', (req, res) => res.json({ phrase: PHRASE }));
 
 // Route de santé utilisée par le healthcheck
 app.get('/health', (req, res) => res.send('OK'));

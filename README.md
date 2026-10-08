@@ -1,6 +1,6 @@
 # M2 TP Docker - Docker Cloud
 
-Mise en place d'une architecture virtualisée basée sur Docker : images personnalisées (front, back, serveur web) orchestrées avec Docker Compose.
+Mise en place d'une architecture virtualisée basée sur Docker : 4 images personnalisées (front, serveur web / gateway, back, worker de nettoyage) orchestrées avec Docker Compose.
 
 Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
 
@@ -18,11 +18,11 @@ Le sujet de départ, un cloud de stockage générique, a été **affiné après 
 | Supprimer un fichier | Avant son expiration, à la demande |
 | Nettoyage automatique | Un worker supprime les fichiers expirés et les envois abandonnés |
 
-### L'interface : « Parchemins éphémères »
+### L'interface
 
 ![Interface du cloud de fichiers éphémères](docs/interface.png)
 
-Application **Angular 22** d'une seule page, au design **QuestUI** (thème RPG médiéval, voir [questui-DESIGN.md](questui-DESIGN.md)) : les fichiers sont des parchemins qui se consument.
+« **Parchemins éphémères** » : application **Angular 22** d'une seule page, au design **QuestUI** (thème RPG médiéval, voir [questui-DESIGN.md](questui-DESIGN.md)) : les fichiers sont des parchemins qui se consument.
 
 | Élément | Comportement |
 |---|---|
@@ -59,11 +59,57 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 | Durée de vie des fichiers, quota, envois atomiques | ✅ Fait |
 | Worker de nettoyage (4e image) : aucun réseau, volume partagé, arrêt propre mesuré | ✅ Fait |
 | Durcissement : systèmes de fichiers en lecture seule (`read_only` + `tmpfs`) | ✅ Fait |
-| Interface web (Angular, design QuestUI) | ✅ Faite (testée avec `ng serve`) |
+| Interface web (Angular, design QuestUI) | ✅ Faite |
 | Image front multi-stage servant l'application Angular, stack passée en Alpine 3.22 | ✅ Fait |
-| Démonstration du scaling | ⏳ À faire |
+| Benchmark sur l'application réelle, CPU redosés (back 0,65 / front 0,25 / gateway 0,10) | ✅ Fait |
+| Tests de bout en bout : cycle de vie complet d'un fichier, persistance, arrêt propre | ✅ Fait |
+| Démonstration du scaling | ⏳ À faire (bonus) |
 
-## Architecture actuelle
+---
+
+## Sommaire
+
+1. [Sujet : cloud de fichiers éphémères](#sujet--cloud-de-fichiers-éphémères)
+2. [Démarrage rapide](#démarrage-rapide)
+3. [Architecture](#architecture)
+4. [Structure du projet](#structure-du-projet)
+5. [Configuration : ARG, ENV et .env](#configuration--arg-env-et-env)
+6. [Les images : points communs](#les-images--points-communs)
+7. [Image Frontend](#image-frontend)
+8. [Image Gateway (serveur web)](#image-gateway-serveur-web)
+9. [Image Backend](#image-backend)
+10. [Image Cleaner (worker de nettoyage)](#image-cleaner-worker-de-nettoyage)
+11. [Orchestration (docker-compose.yml)](#orchestration-docker-composeyml)
+12. [Benchmark : comment les limites ont été choisies](#benchmark--comment-les-limites-ont-été-choisies)
+13. [Scalabilité](#scalabilité)
+14. [Tests et vérifications](#tests-et-vérifications)
+
+---
+
+## Démarrage rapide
+
+Prérequis : Docker avec Docker Compose. Rien d'autre (ni Node, ni Angular, ni nginx) : tout est construit dans les images.
+
+```bash
+docker compose up -d --build --wait   # build des 4 images puis démarrage, attend que tout soit "healthy"
+```
+
+Ouvrir **http://127.0.0.1:8080** : déposer un fichier, choisir sa durée de vie, le télécharger, le détruire.
+
+```bash
+docker compose ps                     # état et santé des 4 services
+docker compose logs -f cleaner        # une ligne par passe du worker de nettoyage
+docker compose down                   # arrêt propre (code de sortie 0 pour chaque service)
+docker compose down -v                # idem, en supprimant aussi le volume (les fichiers stockés)
+```
+
+Tous les réglages (versions, ports, durées de vie, quotas, CPU, mémoire) sont dans le fichier [`.env`](.env) : modifier une valeur puis relancer `docker compose up -d --build`.
+
+> Sur certains postes Windows, `localhost:8080` peut être intercepté par WSL (`wslrelay`) : utiliser `127.0.0.1:8080`.
+
+---
+
+## Architecture
 
 Les schémas ci-dessous sont écrits en [Mermaid](https://mermaid.js.org/) : GitHub les affiche directement, et ils restent versionnés et modifiables comme du code. Une version image du schéma d'architecture est aussi disponible : [docs/architecture.png](docs/architecture.png).
 
@@ -76,11 +122,11 @@ flowchart TB
   subgraph hote["Machine hôte · Docker"]
     direction TB
     subgraph expose["Zone exposée · réseau public"]
-      front["<b>front</b><br/>alpine + Node + tini<br/>écoute :80<br/>0,5 CPU · 128 Mo"]
+      front["<b>front</b><br/>alpine + Node + tini<br/>écoute :80<br/>0,25 CPU · 128 Mo"]
     end
     subgraph interne["Zone interne · réseaux internal: true (sans Internet)"]
-      gateway["<b>gateway</b><br/>alpine + nginx<br/>écoute :80<br/>0,25 CPU · 32 Mo"]
-      back["<b>back</b><br/>alpine + Node + tini<br/>écoute :3000<br/>0,25 CPU · 128 Mo"]
+      gateway["<b>gateway</b><br/>alpine + nginx<br/>écoute :80<br/>0,10 CPU · 48 Mo"]
+      back["<b>back</b><br/>alpine + Node + tini<br/>écoute :3000<br/>0,65 CPU · 128 Mo"]
       vol[("volume <b>stockage</b><br/>monté sur /data")]
     end
     subgraph isole["Aucun réseau · network_mode: none"]
@@ -124,13 +170,13 @@ sequenceDiagram
   participant G as gateway (nginx)
   participant B as back (Node)
   N->>F: GET / sur 127.0.0.1:8080
-  F-->>N: index.html + app.js
-  N->>F: GET /api/phrase (même origine, pas de CORS)
-  F->>G: relais vers http://gateway/api/phrase (interne-front)
-  G->>B: proxy_pass vers http://back:3000/api/phrase (interne-back)
-  B-->>G: 200 {"phrase": "..."}
+  F-->>N: application Angular (index.html, main-*.js, styles-*.css)
+  N->>F: GET /api/files (même origine, pas de CORS)
+  F->>G: relais vers http://gateway/api/files (interne-front)
+  G->>B: proxy_pass vers http://back:3000/api/files (interne-back)
+  B-->>G: 200 [liste des fichiers non expirés]
   G-->>F: 200
-  F-->>N: 200, phrase affichée dans la page
+  F-->>N: 200, liste affichée dans le coffre
   Note over N,G: Envoi plus gros que MAX_UPLOAD_MB : la gateway répond 413 sans contacter le back
 ```
 
@@ -166,59 +212,7 @@ flowchart LR
 
 Chaque service attend que le précédent soit `healthy` (`depends_on: condition: service_healthy`) : la gateway ne reçoit du trafic qu'une fois le back prêt (sinon elle répondrait `502`), le front n'est ouvert qu'une fois toute la chaîne prête, et le cleaner attend que le back ait initialisé les droits du volume.
 
-## Architecture cible
-
-```
-  Navigateur
-      │ :8080
-      ▼
-  ┌─────────┐  http://gateway/api  ┌─────────┐   répartition    ┌─────────┐
-  │  front  │ ───────────────────▶ │ gateway │ ───────────────▶ │ back #1 │──┐
-  └─────────┘                      │  nginx  │ ──────┐          └─────────┘  │
-                                   └─────────┘       │          ┌─────────┐  │   ┌────────────────┐
-                                                     ├────────▶ │ back #2 │──┼──▶│ volume Docker  │
-                                                     │          └─────────┘  │   │ "stockage"     │
-                                                     │          ┌─────────┐  │   │ /data/fichiers │
-                                                     └────────▶ │ back #3 │──┘   └────────────────┘
-                                                                └─────────┘
-```
-
-## Scalabilité
-
-L'objectif est de pouvoir lancer **plusieurs instances du back** avec une seule commande, sans changer de configuration. La gateway nginx répartit les requêtes entre elles.
-
-### Principe
-
-| Élément | Rôle dans la scalabilité |
-|---|---|
-| `docker compose up --scale back=3` (ou `deploy.replicas: 3`) | Lance 3 conteneurs identiques à partir de la même image `back`. |
-| DNS interne Docker | Le nom de service `back` renvoie les adresses IP de **toutes** les instances. |
-| nginx (`upstream`) | Répartit les requêtes `/api` entre les instances (round-robin par défaut). |
-| Volume partagé | Toutes les instances lisent et écrivent dans le **même** volume `stockage` : un fichier envoyé via `back #1` est téléchargeable via `back #3`. |
-
-### Conditions pour que ça fonctionne
-
-1. **Back sans état (stateless)** : aucune donnée n'est gardée en mémoire dans le conteneur. Les fichiers et leurs informations (nom, taille, date) sont lus directement depuis le volume. N'importe quelle instance peut donc répondre à n'importe quelle requête.
-2. **Pas de port publié sur le back** : plusieurs instances ne pourraient pas publier le même port sur la machine hôte. C'est déjà le cas, puisque seul le front est publié. C'est la gateway qui rend le scaling possible.
-3. **Pas de `container_name`** sur le back : Docker doit pouvoir nommer lui-même chaque instance (`back-1`, `back-2`...).
-4. **nginx doit voir les nouvelles instances** : ✅ en place. La gateway interroge le DNS de Docker (`resolver 127.0.0.11 valid=10s`) au lieu de résoudre `back` une seule fois au démarrage. Testé : avec `--scale back=3`, les 3 instances répondent sans redémarrer nginx.
-5. **Noms de fichiers uniques** : deux instances qui écrivent en même temps ne doivent pas écraser le même fichier. On peut par exemple préfixer chaque nom par un identifiant unique.
-
-### Ressources
-
-Les limites de `deploy.resources` s'appliquent **à chaque instance**. Avec 3 instances du back à 0,25 CPU et 128 Mo, le back peut consommer au total 0,75 CPU et 384 Mo. Le benchmark montre aussi qu'il faudra augmenter la gateway et le front en proportion, sinon ils deviendront le goulot (voir [Benchmark](#benchmark--comment-les-limites-ont-été-choisies)). Le nombre d'instances se choisit en fonction des ressources de la machine.
-
-### Démonstration prévue
-
-Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du conteneur qui a répondu. En rafraîchissant la page, on voit les requêtes passer d'une instance à l'autre, alors que tous les fichiers restent visibles.
-
-### Pourquoi c'est un avantage de Docker par rapport aux VM
-
-| | Machines virtuelles | Conteneurs Docker |
-|---|---|---|
-| Ajouter une instance | Créer et démarrer une VM complète (OS invité) : plusieurs minutes, plusieurs Go | Une commande (`--scale`) : quelques secondes, quelques Mo de mémoire par instance |
-| Configuration | À reproduire sur chaque VM | Identique pour toutes les instances, car elles viennent de la même image |
-| Ressources | Réservées par VM, même au repos | Partagées avec le noyau de l'hôte, limitées par conteneur (`cpus`, `memory`) |
+---
 
 ## Structure du projet
 
@@ -264,7 +258,7 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 
 ---
 
-## Variables : ARG, ENV et .env
+## Configuration : ARG, ENV et .env
 
 La configuration se fait à trois niveaux, chacun avec un rôle précis :
 
@@ -288,16 +282,36 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 | `PORT` | `80` (front, gateway) / `3000` (back) | Sert à `EXPOSE ${PORT}` et de valeur par défaut à `ENV PORT=${PORT}`. Le port documenté par l'image et le port d'écoute restent ainsi cohérents. |
 
 ### Pourquoi un `.env` ?
-- **Une seule source de vérité** : les ports, la mémoire, les CPU et la phrase sont regroupés dans un seul fichier. Le `docker-compose.yml` ne contient plus de valeurs en dur.
+- **Une seule source de vérité** : les ports, la mémoire, les CPU et les durées de vie sont regroupés dans un seul fichier. Le `docker-compose.yml` ne contient plus de valeurs en dur.
 - **Cohérence entre services** : `BACK_PORT` est utilisé à la fois par le back (port d'écoute) et par la gateway (port à joindre). Une seule modification met les deux à jour.
-- **Surcharge simple** : une variable d'environnement du shell est prioritaire sur le `.env`. Par exemple, `BACK_PHRASE="Autre phrase" docker compose up -d` change la phrase sans modifier de fichier ni reconstruire l'image (testé).
+- **Surcharge simple** : une variable d'environnement du shell est prioritaire sur le `.env`. Par exemple, `TTL_DEFAULT_H=1 docker compose up -d` change la durée de vie par défaut sans modifier de fichier ni reconstruire l'image. C'est le mécanisme utilisé dans nos tests (par exemple `CLEANUP_INTERVAL_S=10` pour accélérer les passes du worker).
 - Le `.env` est **versionné volontairement** : il ne contient aucun secret, seulement de la configuration.
+
+---
+
+## Les images : points communs
+
+Quatre images, présentées dans l'ordre du trajet d'une requête (front → gateway → back), puis le worker. Chaque section suit le même plan : rôle, image de base, dépendances, manipulations sur l'OS, ports, arguments de build (ARG), arguments au run (ENV), healthcheck, entrypoint et signaux, build et run.
+
+| Image | Base | Rôle | Taille |
+|---|---|---|---|
+| [Frontend](#image-frontend) | alpine 3.22 + Node + tini, **multi-stage** (build Angular) | Point d'entrée : sert l'application, relaie `/api` | 114 Mo |
+| [Gateway](#image-gateway-serveur-web) | alpine 3.22 + nginx | Passerelle d'API : seul chemin vers le back | 18 Mo |
+| [Backend](#image-backend) | alpine 3.22 + Node + tini, **multi-stage** (npm ci) | API Express des fichiers éphémères | 120 Mo |
+| [Cleaner](#image-cleaner-worker-de-nettoyage) | alpine 3.22, **aucun paquet ajouté** | Worker : supprime les fichiers expirés | 13 Mo |
+
+Règles communes à toutes les images : base Alpine en version fixée (ARG `ALPINE_VERSION`), aucune image applicative du Docker Hub, utilisateur non-root, `CMD` / `ENTRYPOINT` en forme exec, arrêt propre sur signal (code de sortie `0` mesuré), healthcheck, et système de fichiers en lecture seule au run.
+
+| Fichier / instruction | Justification |
+|---|---|
+| `.dockerignore` | Le contexte de build ne contient que l'utile : build plus rapide, et pas de `node_modules` Windows, de `.git` ni de logs dans l'image (bonne pratique du cours). Les motifs sont écrits **`**/node_modules`** : un motif simple ne vise que la racine du contexte, et le `Frontend/app/node_modules` local (plusieurs centaines de Mo) aurait été envoyé à Docker à chaque build. |
+| `LABEL org.opencontainers.image.*` | Métadonnées au format standard OCI (titre, description, auteur, dépôt), lisibles avec `docker inspect` : l'image se décrit elle-même. |
 
 ---
 
 ## Image Frontend
 
-**Point d'entrée** de l'architecture. L'image contient l'application **Angular compilée** (voir [L'interface](#linterface--parchemins-éphémères)) et un petit serveur Node, `server.js`, qui a deux rôles :
+**Point d'entrée** de l'architecture. L'image contient l'application **Angular compilée** (voir [L'interface](#linterface)) et un petit serveur Node, `server.js`, qui a deux rôles :
 
 | Requête reçue | Traitement |
 |---|---|
@@ -314,13 +328,6 @@ Le relais est nécessaire car le navigateur ne peut pas résoudre le nom de serv
 **Cache :** les fichiers à empreinte sont envoyés avec `Cache-Control: max-age=31536000, immutable` (leur contenu ne changera jamais sous ce nom), et `index.html` avec `no-cache` (il doit toujours être revérifié pour pointer vers les bons fichiers après un nouveau build).
 
 Le relais transmet le corps des requêtes en flux, ce qui convient aux uploads. Si la gateway répond avant la fin de l'envoi (par exemple `413` pour un fichier trop gros), le front lit le reste du corps sans le transmettre : sans ça, le client restait bloqué à attendre de finir son envoi (bug trouvé et corrigé en testant la limite d'upload).
-
-### Fichiers communs à toutes les images
-
-| Fichier / instruction | Justification |
-|---|---|
-| `.dockerignore` | Le contexte de build ne contient que l'utile : build plus rapide, et pas de `node_modules` Windows, de `.git` ni de logs dans l'image (bonne pratique du cours). Les motifs sont écrits **`**/node_modules`** : un motif simple ne vise que la racine du contexte, et le `Frontend/app/node_modules` local (plusieurs centaines de Mo) aurait été envoyé à Docker à chaque build. |
-| `LABEL org.opencontainers.image.*` | Métadonnées au format standard OCI (titre, description, auteur, dépôt), lisibles avec `docker inspect` : l'image se décrit elle-même. |
 
 ### Image de base : build multi-stage
 
@@ -427,157 +434,10 @@ Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde,
 
 ```bash
 docker build -t front ./Frontend
-docker run -d --name front -p 8080:80 -e NODE_OPTIONS=--max-old-space-size=64 -e GATEWAY_HOST=gateway --memory=128m --memory-swap=128m --cpus=0.5 front
+docker run -d --name front -p 8080:80 -e NODE_OPTIONS=--max-old-space-size=64 -e GATEWAY_HOST=gateway --memory=128m --memory-swap=128m --cpus=0.25 front
 ```
 
-Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucune gateway n'est joignable : voir la section Orchestration.
-
----
-
-## Image Backend
-
-API du cloud de fichiers éphémères, en **Express + multer**. Elle lit et écrit les fichiers directement dans `STORAGE_DIR` (le volume `stockage`), sans base de données : la **date d'expiration est inscrite dans le nom** de chaque fichier stocké. Le front l'appelle en passant par la gateway.
-
-### Routes
-
-| Route | Réponse |
-|---|---|
-| `GET /api/files` | `200` : liste `[{ name, originalName, size, date, expiresAt }]` des fichiers **non expirés**, du plus récent au plus ancien |
-| `POST /api/files` | Envoi d'un fichier (multipart : champ `file`, champ `ttl` optionnel en heures) : `201` `{ name, originalName, size, expiresAt }` ; `400` sans fichier ou `ttl` invalide ; `413` au-delà de `MAX_UPLOAD_MB` ; `507` si le quota de stockage est atteint |
-| `GET /api/files/:name` | `200` : téléchargement sous le nom d'origine ; `410 Gone` si le fichier a expiré ; `404` si absent |
-| `DELETE /api/files/:name` | `204` ; `404` si absent |
-| `GET /api/phrase` | `{"phrase": "..."}` : route de la version Hello World, gardée tant que le front l'utilise |
-| `GET /health` | `OK` : utilisée par le healthcheck |
-| Toute autre route | `404` avec `{"error": "Not found"}` |
-
-Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui a répondu : il servira à montrer la répartition de charge quand le back sera lancé en plusieurs instances.
-
-### Choix de l'API
-
-| Choix | Justification |
-|---|---|
-| Express + multer | Express route les requêtes en quelques lignes ; multer gère le format multipart des envois, pénible à décoder à la main. Ce sont les deux seules dépendances. |
-| Stockage sur disque (`multer.diskStorage`) | Le fichier est écrit **en flux** dans le volume : un fichier de 50 Mo ne passe jamais entièrement en mémoire. Cela compte avec une limite de 128 Mo par conteneur. |
-| Nom stocké = `<expiration en secondes epoch>-<aléatoire>__<nom d'origine>` | **L'expiration est dans le nom** : pas de base de données ni de fichier annexe. Le back reste sans état (n'importe quelle instance sait si un fichier a expiré), et le worker de nettoyage la lit sans jamais parler à l'API. La partie aléatoire évite les écrasements entre deux envois du même nom ou entre instances. |
-| Envoi dans `.incoming/`, puis **renommage atomique** | Le champ `ttl` peut arriver après le fichier dans le formulaire : l'expiration n'est connue qu'à la fin de l'envoi. Le fichier est donc écrit sous un nom temporaire `.part` dans `.incoming/`, puis renommé avec sa date d'expiration. Le renommage est atomique car `.incoming/` est **dans le même volume** : un fichier partiel n'apparaît jamais dans la liste. Un envoi refusé (`400`, `507`) est supprimé, un envoi interrompu reste dans `.incoming/` jusqu'au passage du worker (testé). |
-| Pas de `tmpfs` pour les envois en cours | Un `tmpfs` est de la RAM **comptée dans la limite mémoire** du conteneur : 50 Mo par envoi simultané feraient dépasser les 128 Mo du back. Et un déplacement `tmpfs` → volume imposerait une copie complète, puisque ce sont deux systèmes de fichiers différents. |
-| Fichier expiré : masqué et `410 Gone` | Le worker ne passe que toutes les N secondes : entre l'expiration et sa suppression, l'API ne doit déjà plus le lister ni le servir. `410` (« n'existe plus ») est plus juste que `404` (« n'a jamais existé »). |
-| `ttl` entre 1 minute et `TTL_MAX_H` | En dessous d'une minute, le fichier expirerait avant d'avoir pu être partagé ; au-delà du maximum, ce n'est plus du stockage temporaire. |
-| Quota `STORAGE_QUOTA_MB` (`507 Insufficient Storage`) | Protège le disque de l'hôte : même avec des durées de vie, des envois peuvent s'accumuler avant d'expirer. |
-| Nom d'origine nettoyé | Seuls lettres (accents compris), chiffres, espaces et `. _ -` sont gardés : pas de chemin ni de caractère spécial dans le volume. |
-| Contrôle du `:name` demandé | `path.basename` doit être identique au nom, et les noms cachés (`.xxx`) sont refusés : `../` ou `%2F` ne permettent pas de sortir du dossier de stockage (testé : `404`). |
-| `MAX_UPLOAD_MB` aussi dans le back | Même limite que la gateway : une double sécurité si le back est appelé sans elle. Un envoi refusé ne laisse aucun fichier partiel (testé). |
-| Erreurs : `413` pour un fichier trop gros, sinon `500` générique | Le détail technique reste dans les logs et n'est pas exposé au client. |
-
-### Image de base : build multi-stage
-
-Même base que le Frontend (`alpine:3.22`, version fixée, Node installé par nos soins), mais en **deux stages** :
-
-```
-Stage "deps"  : alpine + nodejs + npm ──▶ npm ci --omit=dev ──▶ node_modules
-                                                                     │ COPY --from=deps
-Stage final   : alpine + nodejs + tini + tzdata ◀───────────────────┘   (npm n'y entre jamais)
-```
-
-| Choix | Justification |
-|---|---|
-| Multi-stage | npm ne sert qu'à **installer** les dépendances, pas à faire tourner l'API. Le stage `deps` est jeté à la fin : npm, son cache et ses outils n'arrivent pas dans l'image livrée. L'image est plus petite et un attaquant dispose de moins d'outils (vérifié : `npm absent` dans l'image finale). |
-| `COPY package.json package-lock.json` **avant** le code | La couche `npm ci` reste en cache tant que les dépendances ne changent pas. Vérifié : après une modification de `server.js`, le rebuild affiche `npm ci ... CACHED`, donc rien n'est réinstallé. |
-| `npm ci` plutôt que `npm install` | Installe **exactement** les versions du `package-lock.json` : le build est reproductible. C'est la règle du cours. |
-| `--omit=dev` | Aucune dépendance de développement en production. |
-
-**Tailles mesurées :**
-
-| Image | Taille | Commentaire |
-|---|---|---|
-| Image | Alpine 3.20 / Node 20 | **Alpine 3.22 / Node 22 (actuel)** | Commentaire |
-|---|---|---|---|
-| Version Hello World (Node natif, aucune dépendance) | 91,8 Mo | – | Référence : l'essentiel du poids vient de `nodejs` |
-| Stage `deps` (avec npm) | 116 Mo | 139 Mo | Ce que serait l'image sans multi-stage |
-| **Image finale multi-stage** | 97,9 Mo | **120 Mo** | 19 Mo de moins que sans multi-stage ; Express + multer n'ajoutent qu'environ 6 Mo. Node 22 pèse environ 22 Mo de plus que Node 20 : c'est le prix d'un runtime encore maintenu |
-
-### Dépendances installées
-
-| Où | Dépendance | Rôle | Pourquoi ce choix |
-|---|---|---|---|
-| Stage `deps` (`apk`) | `nodejs`, `npm` | Installer les paquets npm | npm reste dans ce stage jetable. |
-| Image finale (`apk`) | `nodejs` | Exécute `src/server.js` | Runtime seul, sans npm : les dépendances arrivent déjà installées. |
-| Image finale (`apk`) | `tini` | Init minimal en PID 1 | Relaie SIGTERM à Node et nettoie les processus zombies, pour un arrêt propre. |
-| Image finale (`apk`) | `tzdata` | Fuseaux horaires | Heure de Paris dans les logs de l'API. |
-| npm (`package.json`) | `express` | Routage HTTP | Routes de l'API en quelques lignes. |
-| npm (`package.json`) | `multer` | Décodage des envois multipart | Écrit les fichiers en flux sur le disque, sans les garder en mémoire. |
-
-`apk add --no-cache` dans les deux stages : l'index des paquets n'est pas conservé. `wget` (healthcheck) est fourni par BusyBox : rien à installer.
-
-### Manipulations sur l'OS
-
-| Instruction | Explication |
-|---|---|
-| `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
-| `RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -G stockage back` | Crée le groupe `stockage`, avec un **GID fixe** venant d'un ARG, et l'utilisateur `back` (sans mot de passe ni dossier personnel) dont c'est le groupe principal : tout ce qu'il crée appartient au groupe. L'API ne tourne pas en root. Le GID est fixé parce que le worker de nettoyage doit appartenir au **même** groupe : pour le noyau, seul le numéro compte, pas le nom. |
-| `RUN mkdir -p /data/files/.incoming && chown -R back:stockage /data && chmod -R 2775 /data` | Crée le dossier de stockage (et `.incoming/` pour les envois en cours) **avant** l'instruction `VOLUME` : quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. `2775` : le groupe peut écrire dans le dossier, ce qui permettra au worker de supprimer (supprimer un fichier = écrire dans le **dossier**, pas dans le fichier). Le bit **setgid** (`2`) fait hériter du groupe `stockage` tout ce qui est créé dedans. Vérifié : `drwxrwsr-x back stockage`, et un fichier envoyé appartient bien à `back:stockage`. |
-| `VOLUME /data` | Déclare `/data` comme dossier de données hors de la couche du conteneur. Même avec un simple `docker run`, sans compose, Docker crée un volume anonyme au lieu d'écrire dans le conteneur. Toute instruction placée après `VOLUME` qui modifierait `/data` serait ignorée : d'où le `chown` juste avant. |
-| `WORKDIR /app` | Dossier de travail de l'application. |
-| `COPY --from=deps /app/node_modules ./node_modules` | Récupère seulement les dépendances déjà installées par le stage `deps`, pas npm. |
-| `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Copié en dernier, car c'est ce qui change le plus souvent. |
-| `USER back` | Bascule sur l'utilisateur non-root pour l'exécution. |
-
-### Ports exposés
-
-| Port | Usage |
-|---|---|
-| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau `interne-back`. |
-
-### Arguments de build (ARG)
-
-| ARG | Défaut | Rôle |
-|---|---|---|
-| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
-| `PORT` | `3000` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
-| `STORAGE_GID` | `1500` | GID du groupe `stockage`, partagé avec le worker de nettoyage. Fourni par le `.env` aux deux images : une seule valeur, donc toujours identique. |
-
-### Arguments attendus au run (ENV)
-
-| Variable | Défaut | Rôle |
-|---|---|---|
-| `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
-| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
-| `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
-| `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
-| `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un envoi, la même que pour la gateway. Double sécurité : le back refuse aussi (`413`) si on l'appelle sans passer par la gateway. |
-| `TTL_DEFAULT_H` | `24` | Durée de vie (heures) d'un fichier envoyé sans `ttl`. |
-| `TTL_MAX_H` | `168` | Durée de vie maximale acceptée (7 jours) ; au-delà → `400`. |
-| `STORAGE_QUOTA_MB` | `0` (`1024` dans le `.env`) | Taille totale maximale des fichiers stockés ; `0` = pas de quota. Au-delà → `507`. |
-| `TZ` | `Europe/Paris` | Fuseau horaire. |
-
-### Healthcheck
-
-```dockerfile
-HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
-  CMD wget -qO- http://localhost:${PORT}/health || exit 1
-```
-
-Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permet à la gateway de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
-
-### Entrypoint et gestion de SIGTERM
-
-```dockerfile
-ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "src/server.js"]
-```
-
-Même mécanisme que le Frontend : `tini` en PID 1 relaie les signaux à Node, lancé en forme exec sans shell. La mémoire est fixée par `NODE_OPTIONS`. Dans `server.js`, SIGTERM ferme le serveur proprement puis le processus quitte avec le code 0.
-
-Résultat testé : `docker stop` arrête le conteneur en moins d'une seconde.
-
-### Build et run
-
-```bash
-docker build -t back ./Backend
-docker run -d --name back -p 3000:3000 -e PHRASE="Bonjour depuis le back" -e NODE_OPTIONS=--max-old-space-size=64 --memory=128m --memory-swap=128m --cpus=0.25 back
-```
-
-Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/phrase`). Dans le compose, le back n'est pas publié.
+Seul, le front sert la page, mais `/api/files` renvoie `502` tant qu'aucune gateway n'est joignable : voir la section Orchestration.
 
 ---
 
@@ -591,7 +451,7 @@ Passerelle d'API (API gateway) basée sur nginx, utilisé en reverse proxy : ell
 
 | Requête reçue | Traitement | Rôle |
 |---|---|---|
-| `/api/...` | Redirigée vers `back:3000` | Appels à l'API (ex. `/api/phrase`) |
+| `/api/...` | Redirigée vers `back:3000` | Appels à l'API (ex. `/api/files`) |
 | `/health` | _Répond lui-même_ `OK` | Santé de la gateway (healthcheck) |
 | tout le reste | `404` | La gateway ne sert qu'à joindre l'API : rien d'autre n'est accessible à travers elle. |
 
@@ -700,11 +560,156 @@ docker build -t gateway ./Gateway
 docker network create tp-net
 docker run -d --name back  --network tp-net back
 docker run -d --name gateway --network tp-net \
-  -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=32m --memory-swap=32m --cpus=0.25 gateway
+  -e WORKER_PROCESSES=1 -e WORKER_CONNECTIONS=512 --memory=48m --memory-swap=48m --cpus=0.1 gateway
 docker run -d --name front --network tp-net -p 8080:80 front
 ```
 
-Puis `http://localhost:8080/` affiche la page avec la phrase du back. Le compose remplace ces commandes et gère l'ordre de démarrage.
+Puis `http://localhost:8080/` affiche l'application. Le compose remplace ces commandes et gère l'ordre de démarrage.
+
+---
+
+## Image Backend
+
+API du cloud de fichiers éphémères, en **Express + multer**. Elle lit et écrit les fichiers directement dans `STORAGE_DIR` (le volume `stockage`), sans base de données : la **date d'expiration est inscrite dans le nom** de chaque fichier stocké. Le front l'appelle en passant par la gateway.
+
+### Routes
+
+| Route | Réponse |
+|---|---|
+| `GET /api/files` | `200` : liste `[{ name, originalName, size, date, expiresAt }]` des fichiers **non expirés**, du plus récent au plus ancien |
+| `POST /api/files` | Envoi d'un fichier (multipart : champ `file`, champ `ttl` optionnel en heures) : `201` `{ name, originalName, size, expiresAt }` ; `400` sans fichier ou `ttl` invalide ; `413` au-delà de `MAX_UPLOAD_MB` ; `507` si le quota de stockage est atteint |
+| `GET /api/files/:name` | `200` : téléchargement sous le nom d'origine ; `410 Gone` si le fichier a expiré ; `404` si absent |
+| `DELETE /api/files/:name` | `204` ; `404` si absent |
+| `GET /health` | `OK` : utilisée par le healthcheck |
+| Toute autre route | `404` avec `{"error": "Not found"}` |
+
+Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui a répondu : il servira à montrer la répartition de charge quand le back sera lancé en plusieurs instances.
+
+### Choix de l'API
+
+| Choix | Justification |
+|---|---|
+| Express + multer | Express route les requêtes en quelques lignes ; multer gère le format multipart des envois, pénible à décoder à la main. Ce sont les deux seules dépendances. |
+| Stockage sur disque (`multer.diskStorage`) | Le fichier est écrit **en flux** dans le volume : un fichier de 50 Mo ne passe jamais entièrement en mémoire. Cela compte avec une limite de 128 Mo par conteneur. |
+| Nom stocké = `<expiration en secondes epoch>-<aléatoire>__<nom d'origine>` | **L'expiration est dans le nom** : pas de base de données ni de fichier annexe. Le back reste sans état (n'importe quelle instance sait si un fichier a expiré), et le worker de nettoyage la lit sans jamais parler à l'API. La partie aléatoire évite les écrasements entre deux envois du même nom ou entre instances. |
+| Envoi dans `.incoming/`, puis **renommage atomique** | Le champ `ttl` peut arriver après le fichier dans le formulaire : l'expiration n'est connue qu'à la fin de l'envoi. Le fichier est donc écrit sous un nom temporaire `.part` dans `.incoming/`, puis renommé avec sa date d'expiration. Le renommage est atomique car `.incoming/` est **dans le même volume** : un fichier partiel n'apparaît jamais dans la liste. Un envoi refusé (`400`, `507`) est supprimé, un envoi interrompu reste dans `.incoming/` jusqu'au passage du worker (testé). |
+| Pas de `tmpfs` pour les envois en cours | Un `tmpfs` est de la RAM **comptée dans la limite mémoire** du conteneur : 50 Mo par envoi simultané feraient dépasser les 128 Mo du back. Et un déplacement `tmpfs` → volume imposerait une copie complète, puisque ce sont deux systèmes de fichiers différents. |
+| Fichier expiré : masqué et `410 Gone` | Le worker ne passe que toutes les N secondes : entre l'expiration et sa suppression, l'API ne doit déjà plus le lister ni le servir. `410` (« n'existe plus ») est plus juste que `404` (« n'a jamais existé »). |
+| `ttl` entre 1 minute et `TTL_MAX_H` | En dessous d'une minute, le fichier expirerait avant d'avoir pu être partagé ; au-delà du maximum, ce n'est plus du stockage temporaire. |
+| Quota `STORAGE_QUOTA_MB` (`507 Insufficient Storage`) | Protège le disque de l'hôte : même avec des durées de vie, des envois peuvent s'accumuler avant d'expirer. |
+| Nom d'origine nettoyé | Seuls lettres (accents compris), chiffres, espaces et `. _ -` sont gardés : pas de chemin ni de caractère spécial dans le volume. |
+| Contrôle du `:name` demandé | `path.basename` doit être identique au nom, et les noms cachés (`.xxx`) sont refusés : `../` ou `%2F` ne permettent pas de sortir du dossier de stockage (testé : `404`). |
+| `MAX_UPLOAD_MB` aussi dans le back | Même limite que la gateway : une double sécurité si le back est appelé sans elle. Un envoi refusé ne laisse aucun fichier partiel (testé). |
+| Erreurs : `413` pour un fichier trop gros, sinon `500` générique | Le détail technique reste dans les logs et n'est pas exposé au client. |
+
+### Image de base : build multi-stage
+
+Même base que le Frontend (`alpine:3.22`, version fixée, Node installé par nos soins), mais en **deux stages** :
+
+```
+Stage "deps"  : alpine + nodejs + npm ──▶ npm ci --omit=dev ──▶ node_modules
+                                                                     │ COPY --from=deps
+Stage final   : alpine + nodejs + tini + tzdata ◀───────────────────┘   (npm n'y entre jamais)
+```
+
+| Choix | Justification |
+|---|---|
+| Multi-stage | npm ne sert qu'à **installer** les dépendances, pas à faire tourner l'API. Le stage `deps` est jeté à la fin : npm, son cache et ses outils n'arrivent pas dans l'image livrée. L'image est plus petite et un attaquant dispose de moins d'outils (vérifié : `npm absent` dans l'image finale). |
+| `COPY package.json package-lock.json` **avant** le code | La couche `npm ci` reste en cache tant que les dépendances ne changent pas. Vérifié : après une modification de `server.js`, le rebuild affiche `npm ci ... CACHED`, donc rien n'est réinstallé. |
+| `npm ci` plutôt que `npm install` | Installe **exactement** les versions du `package-lock.json` : le build est reproductible. C'est la règle du cours. |
+| `--omit=dev` | Aucune dépendance de développement en production. |
+
+**Tailles mesurées :**
+
+| Image | Taille | Commentaire |
+|---|---|---|
+| Image | Alpine 3.20 / Node 20 | **Alpine 3.22 / Node 22 (actuel)** | Commentaire |
+|---|---|---|---|
+| Version Hello World (Node natif, aucune dépendance) | 91,8 Mo | – | Référence : l'essentiel du poids vient de `nodejs` |
+| Stage `deps` (avec npm) | 116 Mo | 139 Mo | Ce que serait l'image sans multi-stage |
+| **Image finale multi-stage** | 97,9 Mo | **120 Mo** | 19 Mo de moins que sans multi-stage ; Express + multer n'ajoutent qu'environ 6 Mo. Node 22 pèse environ 22 Mo de plus que Node 20 : c'est le prix d'un runtime encore maintenu |
+
+### Dépendances installées
+
+| Où | Dépendance | Rôle | Pourquoi ce choix |
+|---|---|---|---|
+| Stage `deps` (`apk`) | `nodejs`, `npm` | Installer les paquets npm | npm reste dans ce stage jetable. |
+| Image finale (`apk`) | `nodejs` | Exécute `src/server.js` | Runtime seul, sans npm : les dépendances arrivent déjà installées. |
+| Image finale (`apk`) | `tini` | Init minimal en PID 1 | Relaie SIGTERM à Node et nettoie les processus zombies, pour un arrêt propre. |
+| Image finale (`apk`) | `tzdata` | Fuseaux horaires | Heure de Paris dans les logs de l'API. |
+| npm (`package.json`) | `express` | Routage HTTP | Routes de l'API en quelques lignes. |
+| npm (`package.json`) | `multer` | Décodage des envois multipart | Écrit les fichiers en flux sur le disque, sans les garder en mémoire. |
+
+`apk add --no-cache` dans les deux stages : l'index des paquets n'est pas conservé. `wget` (healthcheck) est fourni par BusyBox : rien à installer.
+
+### Manipulations sur l'OS
+
+| Instruction | Explication |
+|---|---|
+| `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
+| `RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -G stockage back` | Crée le groupe `stockage`, avec un **GID fixe** venant d'un ARG, et l'utilisateur `back` (sans mot de passe ni dossier personnel) dont c'est le groupe principal : tout ce qu'il crée appartient au groupe. L'API ne tourne pas en root. Le GID est fixé parce que le worker de nettoyage doit appartenir au **même** groupe : pour le noyau, seul le numéro compte, pas le nom. |
+| `RUN mkdir -p /data/files/.incoming && chown -R back:stockage /data && chmod -R 2775 /data` | Crée le dossier de stockage (et `.incoming/` pour les envois en cours) **avant** l'instruction `VOLUME` : quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. `2775` : le groupe peut écrire dans le dossier, ce qui permettra au worker de supprimer (supprimer un fichier = écrire dans le **dossier**, pas dans le fichier). Le bit **setgid** (`2`) fait hériter du groupe `stockage` tout ce qui est créé dedans. Vérifié : `drwxrwsr-x back stockage`, et un fichier envoyé appartient bien à `back:stockage`. |
+| `VOLUME /data` | Déclare `/data` comme dossier de données hors de la couche du conteneur. Même avec un simple `docker run`, sans compose, Docker crée un volume anonyme au lieu d'écrire dans le conteneur. Toute instruction placée après `VOLUME` qui modifierait `/data` serait ignorée : d'où le `chown` juste avant. |
+| `WORKDIR /app` | Dossier de travail de l'application. |
+| `COPY --from=deps /app/node_modules ./node_modules` | Récupère seulement les dépendances déjà installées par le stage `deps`, pas npm. |
+| `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Copié en dernier, car c'est ce qui change le plus souvent. |
+| `USER back` | Bascule sur l'utilisateur non-root pour l'exécution. |
+
+### Ports exposés
+
+| Port | Usage |
+|---|---|
+| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau `interne-back`. |
+
+### Arguments de build (ARG)
+
+| ARG | Défaut | Rôle |
+|---|---|---|
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
+| `PORT` | `3000` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
+| `STORAGE_GID` | `1500` | GID du groupe `stockage`, partagé avec le worker de nettoyage. Fourni par le `.env` aux deux images : une seule valeur, donc toujours identique. |
+
+### Arguments attendus au run (ENV)
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
+| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
+| `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
+| `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un envoi, la même que pour la gateway. Double sécurité : le back refuse aussi (`413`) si on l'appelle sans passer par la gateway. |
+| `TTL_DEFAULT_H` | `24` | Durée de vie (heures) d'un fichier envoyé sans `ttl`. |
+| `TTL_MAX_H` | `168` | Durée de vie maximale acceptée (7 jours) ; au-delà → `400`. |
+| `STORAGE_QUOTA_MB` | `0` (`1024` dans le `.env`) | Taille totale maximale des fichiers stockés ; `0` = pas de quota. Au-delà → `507`. |
+| `TZ` | `Europe/Paris` | Fuseau horaire. |
+
+### Healthcheck
+
+```dockerfile
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 \
+  CMD wget -qO- http://localhost:${PORT}/health || exit 1
+```
+
+Contrairement au front, on interroge une route dédiée `/health` : elle vérifie que l'API répond sans dépendre de la logique métier. Le conteneur passe en `healthy`, ce qui permet à la gateway de démarrer seulement quand le back est prêt (`depends_on: condition: service_healthy`).
+
+### Entrypoint et gestion de SIGTERM
+
+```dockerfile
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "src/server.js"]
+```
+
+Même mécanisme que le Frontend : `tini` en PID 1 relaie les signaux à Node, lancé en forme exec sans shell. La mémoire est fixée par `NODE_OPTIONS`. Dans `server.js`, SIGTERM ferme le serveur proprement puis le processus quitte avec le code 0.
+
+Résultat testé : `docker stop` arrête le conteneur en moins d'une seconde.
+
+### Build et run
+
+```bash
+docker build -t back ./Backend
+docker run -d --name back -p 3000:3000 -e TTL_DEFAULT_H=24 -e NODE_OPTIONS=--max-old-space-size=64 --memory=128m --memory-swap=128m --cpus=0.65 back
+```
+
+Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:3000/api/files`). Dans le compose, le back n'est pas publié.
 
 ---
 
@@ -833,14 +838,14 @@ L'application est accessible sur **http://localhost:8080**.
 
 ### Arguments traduits dans le compose
 
-Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .env](#variables--arg-env-et-env)). Pour chaque service :
+Toutes les valeurs viennent du fichier `.env` (voir [Configuration : ARG, ENV et .env](#configuration--arg-env-et-env)). Pour chaque service :
 - `build.args` transmet les **ARG** du Dockerfile ;
 - `environment:` surcharge les **ENV** du Dockerfile au run ;
 - `deploy.resources` et `ports` utilisent aussi des variables du `.env`.
 
 | Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
 |---|---|---|---|
-| `back` | `ALPINE_VERSION`, `PORT`, `STORAGE_GID` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `STORAGE_GID`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `back` | `ALPINE_VERSION`, `PORT`, `STORAGE_GID` | `PORT`, `NODE_OPTIONS`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `STORAGE_DIR`, `STORAGE_GID`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
 | `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `MAX_UPLOAD_MB`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT`, `MAX_UPLOAD_MB` |
 | `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 | `cleaner` | `ALPINE_VERSION`, `STORAGE_GID` | `STORAGE_DIR`, `CLEANUP_INTERVAL_S`, `INCOMING_MAX_AGE_MIN` | `STORAGE_DIR`, `STORAGE_GID`, `CLEANUP_INTERVAL_S`, `INCOMING_MAX_AGE_MIN`, `CLEANER_CPUS`, `CLEANER_MEMORY`, `CLEANER_MEMORY_RESERVATION` |
@@ -864,100 +869,11 @@ Valeurs retenues, justifiées par le benchmark ci-dessous :
 
 | Service | CPU | Mémoire max | Tas Node | Réservation | Pic mesuré |
 |---|---|---|---|---|---|
-| `front` | **0,5** | 128 Mo | 64 Mo | 32 Mo | ~50 % CPU · ~25 Mo |
-| `gateway` (nginx) | **0,25** | **32 Mo** | – | 8 Mo | ~26 % CPU · ~4 Mo |
-| `back` | **0,25** | 128 Mo | 64 Mo | 32 Mo | ~25 % CPU · ~20 Mo |
+| `front` | **0,25** | 128 Mo | 64 Mo | 32 Mo | ~25 % CPU · ~37 Mo (5 envois en parallèle) |
+| `gateway` (nginx) | **0,10** | **48 Mo** | – | 8 Mo | ~10 % CPU · ~4 Mo en charge, ~26 Mo pendant 5 envois en parallèle |
+| `back` | **0,65** | 128 Mo | 64 Mo | 32 Mo | ~65 % CPU · ~33 Mo |
 | `cleaner` (worker) | **0,10** | **16 Mo** | – | 6 Mo | ~10 % CPU · ~4 Mo pendant une passe sur 10 000 fichiers ; 0 % · 0,5 Mo au repos |
 | `bench` (outil) | 1 | 32 Mo | – | – | – |
-
-### Benchmark : comment les limites ont été choisies
-
-Les limites ne sont pas fixées au hasard : elles sont dimensionnées à partir de **mesures sous charge**, faites avec un outil construit pour l'occasion.
-
-> **À refaire avec l'application finale.** Les mesures détaillées ci-dessous ont été faites sur la version Hello World (API en Node natif, Alpine 3.20 / Node 20). Une première mesure après le passage à **Express** et à **Node 22** montre que le dosage a changé : à 50 requêtes en parallèle, 368 req/s au lieu de 634, et c'est maintenant le **back** qui plafonne à sa limite de 0,25 CPU (~0,7 ms de CPU par requête au lieu de ~0,36). La mémoire reste loin des plafonds (back ~28 Mo sur 128, gateway ~6 Mo sur 32). Les limites CPU seront rééquilibrées avec un benchmark complet, envois de fichiers compris.
-
-#### Outil de mesure
-
-| Élément | Choix |
-|---|---|
-| Image `Bench/` | Alpine + `apache2-utils` (`ab`, outil de charge HTTP). Image faite par nous, comme les autres (pas d'image de bench du Hub), non-root, `ENTRYPOINT ["ab"]` : le conteneur s'utilise comme une commande. |
-| Service `bench` dans le compose | Dans le profil `bench` : il ne démarre pas avec `docker compose up`, seulement à la demande. Branché sur le réseau `public` uniquement : il attaque le **front comme un vrai client**, donc la mesure couvre toute la chaîne front → gateway → back. Limité lui aussi (1 CPU) pour ne pas voler le CPU des services mesurés. |
-| Script [Bench/run-bench.ps1](Bench/run-bench.ps1) | Lance chaque scénario `ab` et relève `docker stats` en parallèle pendant toute la charge, pour garder le **pic** CPU et mémoire de chaque service. |
-
-```bash
-docker compose up -d --build --wait
-powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1                          # mesure complète (Windows)
-docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/phrase   # un scénario seul
-docker stats                                                                          # suivi en direct, dans un autre terminal
-```
-
-Scénarios : au repos, 1 000 requêtes à 10 en parallèle, 5 000 requêtes à 50 en parallèle, 5 000 requêtes à 100 en parallèle. Machine de test : Docker Desktop, 12 CPU.
-
-#### Étape 1 : mesure de départ (0,5 CPU pour chaque service)
-
-| Scénario | front CPU / Mo | gateway CPU / Mo | back CPU / Mo | Req/s | p95 |
-|---|---|---|---|---|---|
-| Repos | 1 % / 12 Mo | 4 % / 2 Mo | 3 % / 11 Mo | – | – |
-| 5 000 req, 50 en parallèle | **50 %** / 23 Mo | 31 % / 2 Mo | 33 % / 19 Mo | 763 | 103 ms |
-| 5 000 req, 100 en parallèle | **50 %** / 25 Mo | 31 % / 2 Mo | 30 % / 18 Mo | 875 | 174 ms |
-
-Constat : le **front plafonne à sa limite** (50 %) et bride toute la chaîne, alors que la gateway et le back ont de la marge. Avec la même part de CPU pour tous, une partie du CPU de la gateway et du back est gaspillée.
-
-#### Étape 2 : coût de chaque service, en variant les CPU (5 000 req, 50 en parallèle)
-
-| Config (front / gateway / back) | Req/s | p95 | Goulot observé |
-|---|---|---|---|
-| 0,25 / 0,5 / 0,5 | 294 | 306 ms | front, plafonné à 25 % |
-| 0,5 / 0,5 / 0,5 | 763 | 103 ms | front, plafonné à 50 % |
-| 1 / 0,5 / 0,5 | 1 225 | 80 ms | gateway, au maximum (52 %) |
-| 1 / 0,25 / 0,5 | 781 | 97 ms | gateway, plafonnée à 25 % |
-| 1 / 0,25 / 0,25 | 553 | 196 ms | gateway et back |
-| 1 / 0,1 / 0,5 | 348 | 201 ms | gateway, plafonnée à 10 % |
-
-Dans la config la plus rapide (1 225 req/s), on déduit le **coût CPU d'une requête** pour chaque service (CPU au pic ÷ débit) :
-
-| Service | Coût CPU par requête | Pourquoi |
-|---|---|---|
-| front | ~0,74 ms | Le plus coûteux : il reçoit chaque requête **et** en ouvre une nouvelle vers la gateway (relais). |
-| gateway (nginx) | ~0,42 ms | nginx est efficace, mais il relaie lui aussi chaque requête vers le back. |
-| back | ~0,36 ms | Il ne fait que répondre. |
-
-#### Étape 3 : dimensionnement retenu
-
-**CPU, dosé en proportion du coût par requête**, pour que les trois services saturent à peu près au même débit et qu'aucun CPU ne soit gaspillé :
-- front **0,5** : 0,5 / 0,74 ms ≈ 675 req/s ;
-- gateway **0,25** : 0,25 / 0,42 ms ≈ 600 req/s ;
-- back **0,25** : 0,25 / 0,36 ms ≈ 690 req/s.
-
-Le front reçoit le double des autres parce qu'il coûte deux fois plus par requête. **nginx reçoit autant que le back, mais pas plus** : malgré sa légèreté, il traite toutes les requêtes. Lui donner moins (0,1 CPU) divise le débit de la stack par 3,5 (348 req/s).
-
-**Mémoire, dosée selon le pic mesuré.** C'est là que nginx se distingue nettement :
-- **gateway : 32 Mo** pour un pic d'environ 4 Mo. nginx ne garde presque rien en mémoire, et il écrit les gros corps de requête (uploads) sur disque, pas en RAM. 32 Mo laissent 8 fois de marge, soit 4 fois moins que les services Node.
-- **front et back : 128 Mo** pour un pic d'environ 20 à 25 Mo. Node a un coût fixe plus élevé (moteur V8, environ 9 Mo au repos). La marge (plus de 5 fois) est prévue pour les uploads de l'application. Le tas JavaScript est plafonné à **64 Mo** (`NODE_OPTIONS`), la moitié de la limite : le reste couvre la mémoire hors tas (buffers des flux d'upload), pour que Node libère sa mémoire avant d'atteindre la limite du conteneur.
-- **Réservations** légèrement au-dessus du pic mesuré (32 Mo pour Node, 8 Mo pour nginx) : même si l'hôte manque de mémoire, chaque service garde de quoi tourner normalement.
-
-#### Étape 4 : validation avec les valeurs retenues (sans swap)
-
-| Scénario | front CPU / Mo | gateway CPU / Mo | back CPU / Mo | Req/s | p95 | Échecs |
-|---|---|---|---|---|---|---|
-| Repos | 0 % / 9 Mo | 0 % / 2 Mo | 0 % / 8 Mo | – | – | – |
-| 1 000 req, 10 en parallèle | 42 % / 13 Mo | 13 % / 2 Mo | 26 % / 12 Mo | 335 | 88 ms | 0 |
-| 5 000 req, 50 en parallèle | 45 % / 22 Mo | 25 % / 3 Mo | 25 % / 19 Mo | 634 | 182 ms | 0 |
-| 5 000 req, 100 en parallèle | 50 % / 25 Mo | 27 % / 4 Mo | 22 % / 20 Mo | 803 | 200 ms | 0 |
-
-Avec **1 CPU au total** (contre 1,5 au départ), la stack garde 80 à 90 % du débit initial, sans aucun échec. Les trois services arrivent ensemble près de leur limite, ce qui montre que le dosage est équilibré. Les pics mémoire restent loin des plafonds.
-
-#### Étape 5 : test de dépassement mémoire (OOM)
-
-| Test | Résultat |
-|---|---|
-| Back limité à **6 Mo, sans swap** | Tué par le noyau (`OOMKilled=true`, code `137`), puis relancé en boucle par `restart: unless-stopped` (8 redémarrages en 20 s). C'est le comportement attendu d'une limite dépassée. |
-| Back limité à 6 Mo **avec** la swap par défaut | Ne meurt pas : il déborde sur la swap (`MemorySwap` = 12 Mo). C'est ce constat qui a conduit à ajouter `memswap_limit`. |
-| Processus qui alloue de la mémoire en boucle dans un conteneur à 48 Mo (swap par défaut) | Tué vers 80 Mo et non 48 : la limite réelle était doublée par la swap. |
-
-#### Bug révélé par le benchmark
-
-Le premier lancement d'`ab` restait **bloqué** après environ 500 requêtes. Le relais du front recopiait tels quels les en-têtes de nginx `transfer-encoding: chunked` et `connection: keep-alive`. Ce sont des en-têtes « hop-by-hop » (RFC 7230), propres à une connexion, qu'un proxy ne doit pas retransmettre. Un client HTTP/1.0 comme `ab` ne sait pas lire le format `chunked` et attendait une fermeture qui n'arrivait jamais ; les navigateurs, en HTTP/1.1, ne voyaient pas le problème. Le relais retire maintenant ces en-têtes (`withoutHopByHop` dans [Frontend/server.js](Frontend/server.js)). Résultat : 0 échec sur tous les scénarios.
 
 ### Ordre de démarrage
 
@@ -1047,7 +963,7 @@ Un service qui a besoin d'écrire reçoit seulement ce qu'il lui faut :
 | `cleaner` | Le volume `/data` + `tmpfs` **`/tmp`** de 1 Mo | Suppressions dans le volume, fichier de heartbeat pour le healthcheck. |
 | `bench` | Nulle part | `ab` n'écrit rien. |
 
-**Pourquoi des `tmpfs` si petits ?** Un `tmpfs` est stocké en RAM et **compté dans la limite mémoire** du conteneur (32 Mo pour la gateway). Le limiter évite qu'un remplissage de `/tmp` consomme toute la mémoire du service. C'est aussi ce qui a imposé de ne laisser nginx bufferiser **ni les envois** (`proxy_request_buffering off`) **ni les téléchargements** (`proxy_max_temp_file_size 0`) sur disque : sans ce second réglage, un téléchargement de 40 Mo était coupé à 7 Mo (voir [Image Gateway](#envois-de-fichiers-et-scaling)).
+**Pourquoi des `tmpfs` si petits ?** Un `tmpfs` est stocké en RAM et **compté dans la limite mémoire** du conteneur (48 Mo pour la gateway). Le limiter évite qu'un remplissage de `/tmp` consomme toute la mémoire du service. C'est aussi ce qui a imposé de ne laisser nginx bufferiser **ni les envois** (`proxy_request_buffering off`) **ni les téléchargements** (`proxy_max_temp_file_size 0`) sur disque : sans ce second réglage, un téléchargement de 40 Mo était coupé à 7 Mo (voir [Image Gateway](#envois-de-fichiers-et-scaling)).
 
 **Vérifications :**
 
@@ -1092,3 +1008,209 @@ Seul le front publie un port (`8080:80`). La gateway et le back n'ont aucun `por
 Les liaisons restantes (gateway → front, back → gateway) existent parce que ces services partagent un réseau, mais elles ne présentent pas de risque : la gateway n'expose que `/health` et `/api/`, et le front ne sert que la page.
 
 **Deux conteneurs sur le port 80 ?** Le front et la gateway écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le front est publié (sur `8080`).
+
+---
+
+## Benchmark : comment les limites ont été choisies
+
+Les limites ne sont pas fixées au hasard : elles sont dimensionnées à partir de **mesures sous charge**, faites avec un outil construit pour l'occasion.
+
+La démarche s'est faite en **deux temps** : un premier dimensionnement sur la version Hello World (étapes 1 à 5), puis un **redimensionnement sur l'application réelle** (étape 6), parce que l'API Express qui liste des fichiers ne coûte pas du tout la même chose que l'API Hello World. Les valeurs retenues sont celles de l'étape 6.
+
+### Outil de mesure
+
+| Élément | Choix |
+|---|---|
+| Image `Bench/` | Alpine + `apache2-utils` (`ab`, outil de charge HTTP). Image faite par nous, comme les autres (pas d'image de bench du Hub), non-root, `ENTRYPOINT ["ab"]` : le conteneur s'utilise comme une commande. |
+| Service `bench` dans le compose | Dans le profil `bench` : il ne démarre pas avec `docker compose up`, seulement à la demande. Branché sur le réseau `public` uniquement : il attaque le **front comme un vrai client**, donc la mesure couvre toute la chaîne front → gateway → back. Limité lui aussi (1 CPU) pour ne pas voler le CPU des services mesurés. |
+| Script [Bench/run-bench.ps1](Bench/run-bench.ps1) | Lance chaque scénario `ab` et relève `docker stats` en parallèle pendant toute la charge, pour garder le **pic** CPU et mémoire de chaque service. |
+
+```bash
+docker compose up -d --build --wait
+powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1                          # mesure complète (Windows)
+docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/files   # un scénario seul
+docker stats                                                                          # suivi en direct, dans un autre terminal
+```
+
+Scénarios : au repos, 1 000 requêtes à 10 en parallèle, 5 000 requêtes à 50 en parallèle, 5 000 requêtes à 100 en parallèle. Machine de test : Docker Desktop, 12 CPU.
+
+### Étape 1 : mesure de départ (0,5 CPU pour chaque service)
+
+| Scénario | front CPU / Mo | gateway CPU / Mo | back CPU / Mo | Req/s | p95 |
+|---|---|---|---|---|---|
+| Repos | 1 % / 12 Mo | 4 % / 2 Mo | 3 % / 11 Mo | – | – |
+| 5 000 req, 50 en parallèle | **50 %** / 23 Mo | 31 % / 2 Mo | 33 % / 19 Mo | 763 | 103 ms |
+| 5 000 req, 100 en parallèle | **50 %** / 25 Mo | 31 % / 2 Mo | 30 % / 18 Mo | 875 | 174 ms |
+
+Constat : le **front plafonne à sa limite** (50 %) et bride toute la chaîne, alors que la gateway et le back ont de la marge. Avec la même part de CPU pour tous, une partie du CPU de la gateway et du back est gaspillée.
+
+### Étape 2 : coût de chaque service, en variant les CPU (5 000 req, 50 en parallèle)
+
+| Config (front / gateway / back) | Req/s | p95 | Goulot observé |
+|---|---|---|---|
+| 0,25 / 0,5 / 0,5 | 294 | 306 ms | front, plafonné à 25 % |
+| 0,5 / 0,5 / 0,5 | 763 | 103 ms | front, plafonné à 50 % |
+| 1 / 0,5 / 0,5 | 1 225 | 80 ms | gateway, au maximum (52 %) |
+| 1 / 0,25 / 0,5 | 781 | 97 ms | gateway, plafonnée à 25 % |
+| 1 / 0,25 / 0,25 | 553 | 196 ms | gateway et back |
+| 1 / 0,1 / 0,5 | 348 | 201 ms | gateway, plafonnée à 10 % |
+
+Dans la config la plus rapide (1 225 req/s), on déduit le **coût CPU d'une requête** pour chaque service (CPU au pic ÷ débit) :
+
+| Service | Coût CPU par requête | Pourquoi |
+|---|---|---|
+| front | ~0,74 ms | Le plus coûteux : il reçoit chaque requête **et** en ouvre une nouvelle vers la gateway (relais). |
+| gateway (nginx) | ~0,42 ms | nginx est efficace, mais il relaie lui aussi chaque requête vers le back. |
+| back | ~0,36 ms | Il ne fait que répondre. |
+
+### Étape 3 : dimensionnement retenu
+
+**CPU, dosé en proportion du coût par requête**, pour que les trois services saturent à peu près au même débit et qu'aucun CPU ne soit gaspillé :
+- front **0,5** : 0,5 / 0,74 ms ≈ 675 req/s ;
+- gateway **0,25** : 0,25 / 0,42 ms ≈ 600 req/s ;
+- back **0,25** : 0,25 / 0,36 ms ≈ 690 req/s.
+
+Le front reçoit le double des autres parce qu'il coûte deux fois plus par requête. **nginx reçoit autant que le back, mais pas plus** : malgré sa légèreté, il traite toutes les requêtes. Lui donner moins (0,1 CPU) divise le débit de la stack par 3,5 (348 req/s).
+
+**Mémoire, dosée selon le pic mesuré.** C'est là que nginx se distingue nettement :
+- **gateway : 32 Mo** pour un pic d'environ 4 Mo. nginx ne garde presque rien en mémoire. 32 Mo laissent 8 fois de marge, soit 4 fois moins que les services Node. *(Relevé à 48 Mo à l'étape 6, après une mesure pendant des envois parallèles.)*
+- **front et back : 128 Mo** pour un pic d'environ 20 à 25 Mo. Node a un coût fixe plus élevé (moteur V8, environ 9 Mo au repos). La marge (plus de 5 fois) est prévue pour les uploads de l'application. Le tas JavaScript est plafonné à **64 Mo** (`NODE_OPTIONS`), la moitié de la limite : le reste couvre la mémoire hors tas (buffers des flux d'upload), pour que Node libère sa mémoire avant d'atteindre la limite du conteneur.
+- **Réservations** légèrement au-dessus du pic mesuré (32 Mo pour Node, 8 Mo pour nginx) : même si l'hôte manque de mémoire, chaque service garde de quoi tourner normalement.
+
+### Étape 4 : validation avec les valeurs retenues (sans swap)
+
+| Scénario | front CPU / Mo | gateway CPU / Mo | back CPU / Mo | Req/s | p95 | Échecs |
+|---|---|---|---|---|---|---|
+| Repos | 0 % / 9 Mo | 0 % / 2 Mo | 0 % / 8 Mo | – | – | – |
+| 1 000 req, 10 en parallèle | 42 % / 13 Mo | 13 % / 2 Mo | 26 % / 12 Mo | 335 | 88 ms | 0 |
+| 5 000 req, 50 en parallèle | 45 % / 22 Mo | 25 % / 3 Mo | 25 % / 19 Mo | 634 | 182 ms | 0 |
+| 5 000 req, 100 en parallèle | 50 % / 25 Mo | 27 % / 4 Mo | 22 % / 20 Mo | 803 | 200 ms | 0 |
+
+Avec **1 CPU au total** (contre 1,5 au départ), la stack garde 80 à 90 % du débit initial, sans aucun échec. Les trois services arrivent ensemble près de leur limite, ce qui montre que le dosage est équilibré. Les pics mémoire restent loin des plafonds.
+
+### Étape 5 : test de dépassement mémoire (OOM)
+
+| Test | Résultat |
+|---|---|
+| Back limité à **6 Mo, sans swap** | Tué par le noyau (`OOMKilled=true`, code `137`), puis relancé en boucle par `restart: unless-stopped` (8 redémarrages en 20 s). C'est le comportement attendu d'une limite dépassée. |
+| Back limité à 6 Mo **avec** la swap par défaut | Ne meurt pas : il déborde sur la swap (`MemorySwap` = 12 Mo). C'est ce constat qui a conduit à ajouter `memswap_limit`. |
+| Processus qui alloue de la mémoire en boucle dans un conteneur à 48 Mo (swap par défaut) | Tué vers 80 Mo et non 48 : la limite réelle était doublée par la swap. |
+
+### Étape 6 : redimensionnement sur l'application réelle (Express, Node 22, Alpine 3.22)
+
+Mesures sur la route la plus appelée par l'interface, `GET /api/files`, avec 20 fichiers dans le coffre (5 000 requêtes, 50 en parallèle) :
+
+| Config (front / gateway / back) | Req/s | p95 | CPU back | CPU front | CPU gateway |
+|---|---|---|---|---|---|
+| Valeurs de l'étape 3 : 0,5 / 0,25 / **0,25** | 91 | 708 ms | **27 %, à sa limite** | 14 % | 4 % |
+| Idem, 2e mesure (variabilité) | 82 | 799 ms | **27 %, à sa limite** | 12 % | 4 % |
+| 0,5 / 0,25 / **0,5** | 174 | 397 ms | **51 %, à sa limite** | 19 % | 10 % |
+| Large : 1 / 0,5 / 1 (pour mesurer les coûts) | 361 | 201 ms | **101 %, à sa limite** | 44 % | 14 % |
+
+Le dosage de l'étape 3 ne convient plus : **le back est devenu le seul goulot**. Lister le coffre lui demande de lire le dossier puis d'interroger chaque fichier, soit environ **2,8 ms de CPU par requête** (contre 0,36 ms pour l'API Hello World), alors que le front et la gateway attendent. Coûts mesurés dans la configuration large : back **~2,8 ms**, front **~1,2 ms**, gateway **~0,4 ms**, soit un rapport d'environ **7 / 3 / 1**.
+
+**Nouveau dosage, pour le même budget d'1 CPU** : back **0,65**, front **0,25**, gateway **0,10**, chacun calibré pour tenir environ 210 à 250 req/s. Comme la liste ne dit rien des envois (que le front et la gateway relaient en flux), le dosage a été vérifié aussi sur des envois :
+
+| Mesure | Étape 3 : 0,5 / 0,25 / 0,25 | **Retenu : 0,25 / 0,10 / 0,65** |
+|---|---|---|
+| 1 envoi de 49 Mo | 2,2 s (22 Mo/s) | **1,3 s (38 Mo/s)** |
+| 5 envois de 20 Mo en parallèle | 5,4 s | **3,4 s** |
+| Liste, 5 000 req à 50 en parallèle | 70 req/s, p95 902 ms | **166 req/s, p95 389 ms** |
+| Pics mémoire pendant les envois | front 37 Mo, gateway **26 Mo**, back 33 Mo | front 31 Mo, gateway 4 Mo, back 26 Mo |
+
+Avec le même budget CPU, la liste va **2,4 fois** plus vite et les envois **1,6 fois** plus vite.
+
+**Mémoire de la gateway relevée à 48 Mo** : pendant 5 envois en parallèle, nginx a atteint 26 Mo. Or son `tmpfs` `/tmp` (8 Mo) est compté dans la même limite : 26 + 8 aurait dépassé les 32 Mo de l'étape 3, avec un risque d'arrêt par l'OOM killer. À 48 Mo, nginx reste 2,7 fois moins gourmand que les services Node (128 Mo).
+
+Les limites mémoire des services Node ne changent pas : les pics mesurés (37 Mo au plus) restent loin des 128 Mo, et le tas plafonné à 64 Mo laisse la place à la mémoire hors tas utilisée par les envois en flux.
+
+### Bug révélé par le benchmark
+
+Le premier lancement d'`ab` restait **bloqué** après environ 500 requêtes. Le relais du front recopiait tels quels les en-têtes de nginx `transfer-encoding: chunked` et `connection: keep-alive`. Ce sont des en-têtes « hop-by-hop » (RFC 7230), propres à une connexion, qu'un proxy ne doit pas retransmettre. Un client HTTP/1.0 comme `ab` ne sait pas lire le format `chunked` et attendait une fermeture qui n'arrivait jamais ; les navigateurs, en HTTP/1.1, ne voyaient pas le problème. Le relais retire maintenant ces en-têtes (`withoutHopByHop` dans [Frontend/server.js](Frontend/server.js)). Résultat : 0 échec sur tous les scénarios.
+
+---
+
+## Scalabilité
+
+L'objectif est de pouvoir lancer **plusieurs instances du back** avec une seule commande, sans changer de configuration. La gateway nginx répartit les requêtes entre elles.
+
+### Principe
+
+| Élément | Rôle dans la scalabilité |
+|---|---|
+| `docker compose up --scale back=3` (ou `deploy.replicas: 3`) | Lance 3 conteneurs identiques à partir de la même image `back`. |
+| DNS interne Docker | Le nom de service `back` renvoie les adresses IP de **toutes** les instances. |
+| nginx (`upstream`) | Répartit les requêtes `/api` entre les instances (round-robin par défaut). |
+| Volume partagé | Toutes les instances lisent et écrivent dans le **même** volume `stockage` : un fichier envoyé via `back #1` est téléchargeable via `back #3`. |
+
+### Conditions pour que ça fonctionne
+
+1. **Back sans état (stateless)** : aucune donnée n'est gardée en mémoire dans le conteneur. Les fichiers et leurs informations (nom, taille, date) sont lus directement depuis le volume. N'importe quelle instance peut donc répondre à n'importe quelle requête.
+2. **Pas de port publié sur le back** : plusieurs instances ne pourraient pas publier le même port sur la machine hôte. C'est déjà le cas, puisque seul le front est publié. C'est la gateway qui rend le scaling possible.
+3. **Pas de `container_name`** sur le back : Docker doit pouvoir nommer lui-même chaque instance (`back-1`, `back-2`...).
+4. **nginx doit voir les nouvelles instances** : ✅ en place. La gateway interroge le DNS de Docker (`resolver 127.0.0.11 valid=10s`) au lieu de résoudre `back` une seule fois au démarrage. Testé : avec `--scale back=3`, les 3 instances répondent sans redémarrer nginx.
+5. **Noms de fichiers uniques** : deux instances qui écrivent en même temps ne doivent pas écraser le même fichier. On peut par exemple préfixer chaque nom par un identifiant unique.
+
+### Ressources
+
+Les limites de `deploy.resources` s'appliquent **à chaque instance**. Avec 3 instances du back à 0,65 CPU et 128 Mo, le back peut consommer au total 1,95 CPU et 384 Mo. Le benchmark montre aussi qu'il faudra augmenter la gateway et le front en proportion (rapport de coûts mesuré back / front / gateway ≈ 7 / 3 / 1), sinon ils deviendront le goulot (voir [Benchmark](#benchmark--comment-les-limites-ont-été-choisies)). Le nombre d'instances se choisit en fonction des ressources de la machine.
+
+### Démonstration prévue
+
+Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du conteneur qui a répondu. En rafraîchissant la page, on voit les requêtes passer d'une instance à l'autre, alors que tous les fichiers restent visibles.
+
+### Pourquoi c'est un avantage de Docker par rapport aux VM
+
+| | Machines virtuelles | Conteneurs Docker |
+|---|---|---|
+| Ajouter une instance | Créer et démarrer une VM complète (OS invité) : plusieurs minutes, plusieurs Go | Une commande (`--scale`) : quelques secondes, quelques Mo de mémoire par instance |
+| Configuration | À reproduire sur chaque VM | Identique pour toutes les instances, car elles viennent de la même image |
+| Ressources | Réservées par VM, même au repos | Partagées avec le noyau de l'hôte, limitées par conteneur (`cpus`, `memory`) |
+
+### Architecture cible
+
+```
+  Navigateur
+      │ :8080
+      ▼
+  ┌─────────┐  http://gateway/api  ┌─────────┐   répartition    ┌─────────┐
+  │  front  │ ───────────────────▶ │ gateway │ ───────────────▶ │ back #1 │──┐
+  └─────────┘                      │  nginx  │ ──────┐          └─────────┘  │
+                                   └─────────┘       │          ┌─────────┐  │   ┌────────────────┐
+                                                     ├────────▶ │ back #2 │──┼──▶│ volume Docker  │
+                                                     │          └─────────┘  │   │ "stockage"     │
+                                                     │          ┌─────────┐  │   │ /data/fichiers │
+                                                     └────────▶ │ back #3 │──┘   └────────────────┘
+                                                                └─────────┘
+```
+
+---
+
+## Tests et vérifications
+
+Récapitulatif des vérifications faites sur la stack finale (Alpine 3.22, limites de l'étape 6 du benchmark). Le détail de chaque test est dans la partie concernée.
+
+| Domaine | Test | Résultat |
+|---|---|---|
+| Démarrage | `docker compose up -d --build --wait` | Les 4 services `healthy`, dans l'ordre back → gateway / cleaner → front |
+| Application | Envoi, liste, téléchargement, destruction depuis l'interface | ✅ (navigateur) |
+| Cycle de vie d'un fichier | Envoi avec une durée de vie d'1 minute | `200` → après expiration : masqué et `410` → après la passe du worker : supprimé du volume, `404` |
+| Persistance | Envoi puis `docker compose down` / `up` | Fichier toujours présent, contenu intact |
+| Limites d'envoi | 60 Mo pour une limite à 50 | `413` renvoyé par la gateway, sans atteindre le back |
+| Quota | Quota à 1 Mo, envoi de 2 Mo | `507`, aucun fichier laissé |
+| Sécurité de l'API | `../`, `%2F`, fichiers cachés, `ttl` invalides | `404` / `400` |
+| Réseau | Qui peut joindre qui (`wget` depuis chaque conteneur) | Front → back **bloqué**, back / gateway sans Internet, cleaner sans aucune interface réseau |
+| Ports | `docker compose ps` | Seul le front publie un port (`8080`) |
+| Droits du volume | Fichier du back (1001:1500) supprimé par le cleaner (1002:1500) | ✅ ; dossier en `755` → `ERREUR` journalisée |
+| Lecture seule | `touch` hors volume et hors `/tmp` | `Read-only file system` pour les 4 services |
+| Téléchargements | 40 Mo téléchargés lentement (2 Mo/s) | Complets (avant correction : coupés à 7 Mo) |
+| Images | Contenu des images finales | Ni `npm` ni `node_modules` ni sources dans le front ; ni `npm` dans le back |
+| Cache de build | Modification du code seul | `npm ci` reste `CACHED` (front et back) |
+| Ressources | `docker inspect` des limites | Conformes au `.env` ; swap désactivée (`MemorySwap` = `Memory`) |
+| Dépassement mémoire | Back limité à 6 Mo sans swap | Tué (`OOMKilled`, code `137`) puis relancé par `restart: unless-stopped` |
+| Arrêt propre | `docker compose stop` de chaque service | **Code de sortie `0`** pour les 4, en moins d'une seconde |
+| Arrêt du worker en pleine passe | SIGTERM pendant la suppression de 10 000 fichiers | Code `0` dans 6 cas sur 6, reprise au redémarrage |
+| Charge | 5 000 requêtes, 50 en parallèle sur la liste | 166 req/s, p95 389 ms, **0 échec** |
+
+**Défauts trouvés par ces tests et corrigés** (détaillés dans leurs parties) : front qui contournait la gateway (réseaux séparés), client bloqué après un `413` (relais), clients HTTP/1.0 bloqués (en-têtes hop-by-hop), limites mémoire doublées par la swap (`memswap_limit`), UID identiques entre back et cleaner (UID explicites), worker tué en pleine passe (`setsid`), téléchargements tronqués avec un `tmpfs` (`proxy_max_temp_file_size 0`), back devenu goulot avec l'application réelle (CPU redosés), gateway proche de sa limite mémoire pendant des envois parallèles (48 Mo).
+

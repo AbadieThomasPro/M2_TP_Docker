@@ -25,7 +25,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 |---|---|---|
 | `Frontend/` | multi-stage : `build` (alpine + nodejs + npm, `ng build`) puis alpine + nodejs + tini | Sert l'application Angular compilée (`public/`, depuis `app/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
-| `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health` (et `/api/phrase` tant que le front Hello World l'utilise). Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
+| `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health`. Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
 | `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
@@ -41,7 +41,7 @@ docker compose logs -f <service>
 docker compose down                   # arrêt propre ; -v supprime aussi les volumes
 docker compose run --rm gateway nginx -t -c /tmp/nginx.conf   # tester la config nginx générée
 powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1    # benchmark (stack démarrée)
-docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/phrase   # un scénario ab
+docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/files    # un scénario ab
 ```
 
 Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut être intercepté par `wslrelay` (WSL) : utiliser `127.0.0.1`.
@@ -95,6 +95,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Polices chargées depuis Google Fonts par le navigateur : aucune dépendance ajoutée dans les images Docker.
 
 ### Documentation
+- **Ordre des parties du README** (à respecter pour tout ajout) : Sujet → Sommaire → Démarrage rapide → Architecture → Structure → Configuration (ARG / ENV / `.env`) → Les images : points communs → Image Frontend → Gateway → Backend → Cleaner → Orchestration → Benchmark → Scalabilité → Tests et vérifications. Les sections d'image gardent le même plan. Toute nouvelle partie de niveau 2 est ajoutée au sommaire ; les liens internes sont vérifiés (aucune ancre cassée).
 - Chaque changement d'image ou du compose met à jour le **README.md** (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources).
 - Toute modification d'architecture (service, réseau, port, volume, `depends_on`, ressources) met à jour les **schémas Mermaid** du README (architecture, séquence, ordre de démarrage) et régénère `docs/architecture.png`. Vérifier le rendu avant de livrer (une erreur de syntaxe Mermaid casse l'affichage sur GitHub).
 - Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans le README quand ils justifient un choix.
@@ -106,7 +107,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 
 ### Tests avant de rendre un lot
 - `docker compose up -d --build --wait` : les 3 services sont `healthy`.
-- `curl.exe -s -m 10 http://127.0.0.1:8080/api/phrase` répond (toujours un délai max `-m` : une requête bloquée ne doit pas bloquer le test).
+- `curl.exe -s -m 10 http://127.0.0.1:8080/api/files` répond (toujours un délai max `-m` : une requête bloquée ne doit pas bloquer le test).
 - Arrêt de chaque service en moins d'1 s.
 - **Code de sortie à l'arrêt = `0`** pour chaque conteneur (`docker compose stop`, puis `docker inspect -f '{{.State.ExitCode}}' <conteneur>`) :
   - `0` ✅ : le signal a été reçu et traité, arrêt propre ;

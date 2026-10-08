@@ -21,5 +21,6 @@ USER bench
 # ab en ENTRYPOINT : le conteneur s'utilise comme une commande (modèle « outil CLI » du cours)
 ENTRYPOINT ["ab"]
 
-# Test par défaut remplaçable au run : 1000 requêtes, 10 en parallèle, sur le front comme un vrai client
-CMD ["-n", "1000", "-c", "10", "http://front/api/phrase"]
+# Test par défaut remplaçable au run : 1000 requêtes, 10 en parallèle, sur le front comme un vrai client.
+# /api/files (liste des fichiers) : la route la plus appelée par l'interface, qui traverse toute la chaîne
+CMD ["-n", "1000", "-c", "10", "http://front/api/files"]

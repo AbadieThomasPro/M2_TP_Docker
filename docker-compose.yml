@@ -18,7 +18,6 @@ services:
       PORT: ${BACK_PORT}
       # Tas Node sous la limite mémoire : Node libère avant d'être tué (OOM)
       NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
-      PHRASE: ${BACK_PHRASE}
       STORAGE_DIR: ${STORAGE_DIR}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}   # même valeur que la gateway : double sécurité
       TTL_DEFAULT_H: ${TTL_DEFAULT_H}
@@ -119,7 +118,7 @@ services:
     memswap_limit: ${GATEWAY_MEMORY}   # pas de swap, comme le back
     # Lecture seule, comme le back. nginx doit pourtant écrire : config générée, PID, fichiers temporaires
     read_only: true
-    # ... d'où un /tmp en RAM, limité car il compte dans la mémoire du conteneur (32 Mo)
+    # ... d'où un /tmp en RAM, limité car il compte dans la limite mémoire du conteneur
     tmpfs:
       - /tmp:size=${GATEWAY_TMPFS_SIZE}
     stop_grace_period: 10s

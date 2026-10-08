@@ -64,14 +64,12 @@ ARG PORT=3000
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
 # NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire
-# PHRASE en ENV : changer la réponse de l'API ne demande pas de rebuild
 # STORAGE_DIR en ENV : le code lit le chemin au lieu de l'écrire en dur (doit rester sous /data, le volume)
 # MAX_UPLOAD_MB : même défaut que la gateway, le back refuse aussi les fichiers trop gros
 # TTL_* : durée de vie des fichiers (heures) ; STORAGE_QUOTA_MB : 0 = pas de quota par défaut
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
     NODE_OPTIONS="--max-old-space-size=128" \
-    PHRASE="Hello World depuis le back !" \
     STORAGE_DIR=/data/files \
     MAX_UPLOAD_MB=10 \
     TTL_DEFAULT_H=24 \

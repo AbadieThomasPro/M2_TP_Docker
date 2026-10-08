@@ -12,7 +12,7 @@ param(
   # Scénarios par défaut : charge légère, forte, puis très forte concurrence
   [string[]]$Scenarios = @("1000:10", "5000:50", "5000:100"),
   # Le front, comme un vrai client : la mesure couvre toute la chaîne front -> gateway -> back
-  [string]$Url = "http://front/api/phrase"
+  [string]$Url = "http://front/api/files"
 )
 
 # Pas d'ErrorActionPreference "Stop" : en PowerShell 5.1, la progression que docker écrit sur stderr
