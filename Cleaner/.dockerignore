@@ -1,0 +1,5 @@
+# Contexte de build réduit au strict nécessaire : seul le script est utile
+*.log
+.git
+Dockerfile
+.dockerignore

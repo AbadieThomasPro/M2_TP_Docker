@@ -44,8 +44,10 @@ RUN apk add --no-cache nodejs tini tzdata
 ARG STORAGE_GID=1500
 
 # Groupe "stockage" partagé avec le cleaner, et utilisateur dédié "back" dont c'est le groupe principal :
-# les fichiers qu'il crée appartiennent au groupe. Non-root : en cas de faille, l'attaquant n'est pas root
-RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -G stockage back
+# les fichiers qu'il crée appartiennent au groupe. Non-root : en cas de faille, l'attaquant n'est pas root.
+# UID fixé à 1001 : par défaut adduser donne 1000 au premier utilisateur de CHAQUE image, et le cleaner
+# aurait eu le même UID, donc été vu par le noyau comme propriétaire du dossier (constaté en test)
+RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -u 1001 -G stockage back
 
 # Dossier de stockage (et .incoming pour les envois en cours) créé AVANT le VOLUME : Docker recopie
 # ces droits dans un volume neuf, sinon il appartiendrait à root et l'API (non-root) ne pourrait pas écrire.

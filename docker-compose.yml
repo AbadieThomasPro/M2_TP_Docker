@@ -48,6 +48,45 @@ services:
     networks:
       - interne-back
 
+  # Worker qui supprime les fichiers expirés et les envois abandonnés
+  cleaner:
+    build:
+      context: ./Cleaner
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        STORAGE_GID: ${STORAGE_GID}   # même valeur que le back : sinon il ne pourrait rien supprimer
+    image: docker-cloud/cleaner
+    environment:
+      STORAGE_DIR: ${STORAGE_DIR}
+      CLEANUP_INTERVAL_S: ${CLEANUP_INTERVAL_S}
+      INCOMING_MAX_AGE_MIN: ${INCOMING_MAX_AGE_MIN}
+    # Même volume que le back : il lit l'expiration dans les noms et supprime, sans jamais parler à l'API
+    volumes:
+      - stockage:/data
+    # Aucun réseau : il ne parle à personne, on lui retire donc toute interface (moindre privilège)
+    network_mode: none
+    # Le premier conteneur qui monte un volume neuf y recopie les droits de son image :
+    # le back (qui crée /data/files en 2775 groupe stockage) doit passer avant le cleaner
+    depends_on:
+      back:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${CLEANER_CPUS}"
+          memory: ${CLEANER_MEMORY}
+        reservations:
+          memory: ${CLEANER_MEMORY_RESERVATION}
+    memswap_limit: ${CLEANER_MEMORY}   # pas de swap, comme les autres services
+    # Système de fichiers en lecture seule : le worker n'écrit que dans le volume et dans /tmp (heartbeat)
+    read_only: true
+    # /tmp en RAM et minuscule : il ne contient que le heartbeat, et compte dans la mémoire du conteneur
+    tmpfs:
+      - /tmp:size=1m
+    # 10 s : le worker s'arrête après le fichier en cours (mesuré, voir README)
+    stop_grace_period: 10s
+    restart: unless-stopped
+
   gateway:
     build:
       context: ./Gateway

@@ -27,6 +27,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health` (et `/api/phrase` tant que le front Hello World l'utilise). Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
+| `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
 | `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
@@ -64,7 +65,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 ### Bonnes pratiques Docker (cours 1)
 - Base `alpine` avec une **version fixée** (ARG `ALPINE_VERSION`), jamais `latest`.
 - `apk add --no-cache`, chaque paquet justifié. Pas de `npm` dans une image finale (multi-stage si un build est nécessaire).
-- **Utilisateur non-root** (`USER`), fichiers du code laissés à root (lecture seule).
+- **Utilisateur non-root** (`USER`), fichiers du code laissés à root (lecture seule). **UID explicites** (`adduser -u`) dès que deux images partagent un volume : sinon chacune donne 1000 à son premier utilisateur, et le noyau les confond (back = 1001, cleaner = 1002, groupe `stockage` = `STORAGE_GID`).
 - Ordre des couches : OS, paquets, utilisateur, ARG/ENV en haut ; `COPY` du code **en dernier**.
 - `CMD` / `ENTRYPOINT` en **forme exec**. Images Node : `ENTRYPOINT ["/sbin/tini", "--"]` + `CMD ["node", ...]`, mémoire via `NODE_OPTIONS`. Scripts d'init : terminer par `exec "$@"`.
 - Arrêt propre : l'application gère SIGTERM (nginx : `STOPSIGNAL SIGQUIT`). Objectif : `docker stop` en moins d'1 s.
