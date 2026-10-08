@@ -21,7 +21,7 @@ Un service de stockage de fichiers simplifié, à la manière d'un Google Drive 
 |---|---|
 | Images personnalisées | 3 images construites depuis `alpine` : front (Node), back (Node), gateway (nginx). |
 | Persistance | Les fichiers sont stockés dans un **volume Docker** : ils survivent à l'arrêt, à la suppression et à la reconstruction des conteneurs. |
-| Isolation réseau | Seul le front est publié. La gateway, le back et le stockage restent sur un réseau interne. |
+| Isolation réseau | Seul le front est publié. La gateway et le back restent sur deux réseaux internes séparés : le front ne peut joindre le back qu'à travers la gateway. |
 | Limitation des ressources | CPU et mémoire par conteneur, plus une taille max d'upload imposée par nginx (`client_max_body_size`). |
 | Scalabilité | Plusieurs instances du back derrière la gateway nginx, qui répartit la charge (voir [Scalabilité](#scalabilité)). |
 
@@ -47,12 +47,18 @@ Un service de stockage de fichiers simplifié, à la manière d'un Google Drive 
   │            │    front    │  Node : page + relais /api        │
   │            └──────┬──────┘                                   │
   ├───────────────────┼──────────────────────────────────────────┤
-  │ réseau "interne"  │ http://gateway/api/...  (internal: true) │
+  │ "interne-front"   │ http://gateway/api/...  (internal: true) │
   │                   ▼                                          │
-  │            ┌─────────────┐        ┌─────────────┐            │
-  │            │   gateway   │ ─────▶ │    back     │            │
-  │            │    nginx    │  :3000 │ Node : API  │            │
-  │            └─────────────┘        └─────────────┘            │
+  │            ┌─────────────┐                                   │
+  │            │   gateway   │  nginx : seul pont front ↔ back   │
+  │            └──────┬──────┘                                   │
+  ├───────────────────┼──────────────────────────────────────────┤
+  │ "interne-back"    │ http://back:3000/api/... (internal: true)│
+  │                   ▼                                          │
+  │            ┌─────────────┐        ┌──────────────────┐       │
+  │            │    back     │ ─────▶ │ volume "stockage"│       │
+  │            │ Node : API  │  /data └──────────────────┘       │
+  │            └─────────────┘                                   │
   └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -61,7 +67,7 @@ Un service de stockage de fichiers simplifié, à la manière d'un Google Drive 
 3. Le `server.js` du front relaie l'appel vers `http://gateway/api/phrase` (nom du service Docker).
 4. La gateway nginx transmet la requête au back (`back:3000`), qui renvoie la phrase en JSON.
 
-Seul le front est accessible depuis l'extérieur. La gateway et le back ne sont joignables que sur le réseau interne.
+Seul le front est accessible depuis l'extérieur. La gateway et le back ne sont joignables que sur les réseaux internes, et le front ne peut joindre le back **qu'à travers la gateway**.
 
 ## Architecture cible
 
@@ -334,7 +340,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 
 | Port | Usage |
 |---|---|
-| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau interne du compose. |
+| `3000` | Port de l'API (valeur par défaut de `PORT`). Il n'est pas publié sur la machine hôte : seule la gateway y accède, via le réseau `interne-back`. |
 
 ### Arguments de build (ARG)
 
@@ -386,7 +392,7 @@ Le `-p 3000:3000` sert uniquement à tester l'API seule (`curl http://localhost:
 
 ## Image Gateway (serveur web)
 
-Passerelle d'API (API gateway) basée sur nginx, utilisé en reverse proxy : elle fait la **liaison entre le front et le back**. Elle n'est pas publiée sur la machine hôte : seul le front la contacte, par son nom de service `gateway`, sur le réseau interne.
+Passerelle d'API (API gateway) basée sur nginx, utilisé en reverse proxy : elle fait la **liaison entre le front et le back**. Elle n'est pas publiée sur la machine hôte : seul le front la contacte, par son nom de service `gateway`, sur le réseau `interne-front`.
 
 **Pourquoi « gateway » et pas « proxy » ?** Techniquement, nginx reste un reverse proxy. Mais son rôle dans l'architecture est plus large : c'est le **seul chemin vers l'API**. Il bloque tout ce qui n'est pas `/api`, impose des limites (taille des uploads) et répartira la charge entre les instances du back. Le nom « gateway » décrit ce rôle, et il évite la confusion avec le relais `/api` du front, qui fait lui aussi office de proxy.
 
@@ -431,7 +437,7 @@ Pas de `tini` ici : nginx est conçu pour tourner en PID 1. Son processus maîtr
 
 | Port | Usage |
 |---|---|
-| `80` | Port HTTP de la gateway, joint par le front sur le réseau interne (`GATEWAY_PORT`). Il n'est pas publié sur la machine hôte. |
+| `80` | Port HTTP de la gateway, joint par le front sur le réseau `interne-front` (`GATEWAY_PORT`). Il n'est pas publié sur la machine hôte. |
 
 ### Arguments de build (ARG)
 
@@ -607,8 +613,28 @@ Commandes utiles : `docker volume inspect docker-cloud_stockage` (emplacement su
 | Réseau | Services | Rôle |
 |---|---|---|
 | `public` | `front` | Réseau relié à la machine hôte, utilisé pour publier le port `8080:80`. |
-| `interne` (`internal: true`) | `front`, `gateway`, `back` | Réseau privé sans accès vers l'extérieur. La gateway et le back n'y sont joignables que par les autres conteneurs. |
+| `interne-front` (`internal: true`) | `front`, `gateway` | Liaison front → gateway uniquement. Aucun accès extérieur. |
+| `interne-back` (`internal: true`) | `gateway`, `back` | Liaison gateway → back uniquement. Aucun accès extérieur. |
 
-Seul le front publie un port (`8080:80`). La gateway et le back n'ont aucun `ports:` : leur port (`80` et `3000`) n'existe que sur le réseau interne et n'est pas joignable depuis la machine hôte (vérifié avec `docker compose ps`). Même en cas de faille dans le front, le back ne peut être atteint qu'à travers la gateway, qui ne laisse passer que `/api/`.
+**Pourquoi deux réseaux internes plutôt qu'un ?** Avec un seul réseau `interne` partagé par les 3 services, le test a montré que **le front pouvait joindre `back:3000` en direct** et contourner la gateway, donc son filtrage (`/api/` seulement) et sa limite d'upload. Avec deux réseaux, chaque service ne voit que ses voisins directs. La gateway, branchée sur les deux, est le **seul pont** entre le front et le back. C'est le même principe que l'exemple du cours, où nginx ne peut pas joindre la base de données.
+
+Seul le front publie un port (`8080:80`). La gateway et le back n'ont aucun `ports:` : leur port (`80` et `3000`) n'existe que sur les réseaux internes.
+
+**Vérifications** (`docker network inspect`, `docker compose ps`, `wget` depuis chaque conteneur) :
+
+| Test | Résultat |
+|---|---|
+| Ports publiés sur l'hôte | Seulement `front` (`0.0.0.0:8080->80`) |
+| `interne-front` / `interne-back` | `Internal: true`, avec respectivement `front` + `gateway` et `gateway` + `back` |
+| Hôte → `127.0.0.1:8080` (front) | ✅ 200 |
+| Hôte → `127.0.0.1:3000` (back) | ⛔ injoignable |
+| front → gateway | ✅ joignable (chemin prévu) |
+| **front → back:3000** | ⛔ **bloqué** (avant la séparation : joignable) |
+| gateway → back:3000 | ✅ joignable (chemin prévu) |
+| back → front | ⛔ bloqué |
+| back → Internet / gateway → Internet | ⛔ bloqué (`internal: true`) |
+| front → Internet | ✅ joignable : c'est la contrepartie du réseau `public`, nécessaire pour publier son port |
+
+Les liaisons restantes (gateway → front, back → gateway) existent parce que ces services partagent un réseau, mais elles ne présentent pas de risque : la gateway n'expose que `/health` et `/api/`, et le front ne sert que la page.
 
 **Deux conteneurs sur le port 80 ?** Le front et la gateway écoutent tous les deux sur le port `80`, mais il n'y a pas de conflit : chaque conteneur a sa propre pile réseau et sa propre adresse IP. Un conflit n'apparaîtrait qu'en publiant deux fois le même port sur la machine hôte, et seul le front est publié (sur `8080`).

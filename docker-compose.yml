@@ -36,9 +36,9 @@ services:
     stop_grace_period: 10s
     # Relance après un crash, mais respecte un arrêt volontaire
     restart: unless-stopped
-    # Réseau interne seulement : le back n'a pas à être joignable depuis l'extérieur
+    # Uniquement le réseau de la gateway : le back n'est joignable ni de l'extérieur ni par le front
     networks:
-      - interne
+      - interne-back
 
   gateway:
     build:
@@ -68,9 +68,10 @@ services:
           memory: ${GATEWAY_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
-    # Pas de ports publiés : seul le front doit pouvoir joindre la gateway
+    # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
     networks:
-      - interne
+      - interne-front
+      - interne-back
 
   front:
     build:
@@ -101,16 +102,20 @@ services:
           memory: ${FRONT_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
-    # public pour être joignable depuis l'hôte, interne pour joindre la gateway
+    # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
     networks:
       - public
-      - interne
+      - interne-front
 
 networks:
   # Seul le front y est branché : c'est le seul service qui doit être exposé
   public:
-  # internal: true pour couper tout accès extérieur à la gateway et au back, qui n'en ont pas besoin
-  interne:
+  # Deux réseaux internes plutôt qu'un : avec un seul, le front pouvait joindre back:3000 en direct
+  # et contourner la gateway. Chaque service ne voit plus que ses voisins directs.
+  # internal: true coupe tout accès extérieur (ni entrée depuis l'hôte, ni sortie vers Internet).
+  interne-front:
+    internal: true
+  interne-back:
     internal: true
 
 volumes:

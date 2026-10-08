@@ -14,16 +14,19 @@ C'est un **cours Docker, pas un cours web**. Le code applicatif reste minimal (H
 ## Architecture
 
 ```
-Navigateur ──:8080──▶ front ──http://gateway/api──▶ gateway (nginx) ──▶ back:3000
-                (seul port publié)        réseau "interne" (internal: true)
+Navigateur ──:8080──▶ front ──http://gateway/api──▶ gateway (nginx) ──▶ back:3000 ──▶ volume "stockage" (/data)
+           (seul port publié)  réseau "interne-front"            réseau "interne-back"
+                               (internal: true)                  (internal: true)
 ```
+
+Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont entre les deux réseaux internes.
 
 | Dossier | Image | Rôle |
 |---|---|---|
 | `Frontend/` | alpine + nodejs + tini | Sert la page (`src/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | alpine + nodejs + tini | API : `GET /api/phrase`, `GET /health`. |
-| `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne`, ressources, healthchecks, ordre back → gateway → front. |
+| `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
