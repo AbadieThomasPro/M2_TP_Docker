@@ -29,7 +29,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `docker-stack.yml` + `swarm-deploy.ps1/.sh` | – | Déploiement Swarm : 3 back, 1 cleaner (réseau `isole`), réservations, plafond, mises à jour progressives. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
-| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
+| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **local, non versionné** (`.gitignore`). Service `bench` **commenté** dans le compose : le décommenter pour mesurer. `run-bench.ps1` mesure les pics CPU / mémoire. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
@@ -41,6 +41,7 @@ docker compose ps                     # état / santé / ports
 docker compose logs -f <service>
 docker compose down                   # arrêt propre ; -v supprime aussi les volumes
 docker compose run --rm gateway nginx -t -c /tmp/nginx.conf   # tester la config nginx générée
+# Bench : décommenter d'abord le service bench du compose (dossier Bench/ local)
 powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1    # benchmark (stack démarrée)
 docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/files    # un scénario ab
 ```
