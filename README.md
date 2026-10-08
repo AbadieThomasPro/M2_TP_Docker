@@ -108,7 +108,7 @@ flowchart LR
   B["<b>1 · back</b><br/>healthcheck GET /health"] -- "service_healthy" --> G["<b>2 · gateway</b><br/>healthcheck GET /health"] -- "service_healthy" --> F["<b>3 · front</b><br/>healthcheck GET /"]
 ```
 
-Chaque service attend que le précédent soit `healthy` (`depends_on: condition: service_healthy`) : nginx refuse de démarrer s'il ne peut pas résoudre `back`, et le front n'est ouvert qu'une fois toute la chaîne prête.
+Chaque service attend que le précédent soit `healthy` (`depends_on: condition: service_healthy`) : la gateway ne reçoit du trafic qu'une fois le back prêt (sinon elle répondrait `502`), et le front n'est ouvert qu'une fois toute la chaîne prête.
 
 ## Architecture cible
 
@@ -145,7 +145,7 @@ L'objectif est de pouvoir lancer **plusieurs instances du back** avec une seule 
 1. **Back sans état (stateless)** : aucune donnée n'est gardée en mémoire dans le conteneur. Les fichiers et leurs informations (nom, taille, date) sont lus directement depuis le volume. N'importe quelle instance peut donc répondre à n'importe quelle requête.
 2. **Pas de port publié sur le back** : plusieurs instances ne pourraient pas publier le même port sur la machine hôte. C'est déjà le cas, puisque seul le front est publié. C'est la gateway qui rend le scaling possible.
 3. **Pas de `container_name`** sur le back : Docker doit pouvoir nommer lui-même chaque instance (`back-1`, `back-2`...).
-4. **nginx doit voir les nouvelles instances** : nginx résout `back` au démarrage. Il faut soit utiliser le DNS de Docker avec un `resolver 127.0.0.11` et une durée de validité courte, soit recharger nginx (`nginx -s reload`) après un changement du nombre d'instances.
+4. **nginx doit voir les nouvelles instances** : ✅ en place. La gateway interroge le DNS de Docker (`resolver 127.0.0.11 valid=10s`) au lieu de résoudre `back` une seule fois au démarrage. Testé : avec `--scale back=3`, les 3 instances répondent sans redémarrer nginx.
 5. **Noms de fichiers uniques** : deux instances qui écrivent en même temps ne doivent pas écraser le même fichier. On peut par exemple préfixer chaque nom par un identifiant unique.
 
 ### Ressources
@@ -497,6 +497,18 @@ Passerelle d'API (API gateway) basée sur nginx, utilisé en reverse proxy : ell
 
 La gateway isole le back : le front ne connaît que l'adresse `gateway`, pas celle du back. On peut changer ou déplacer le back en modifiant seulement `BACK_HOST` et `BACK_PORT` de la gateway.
 
+### Envois de fichiers et scaling
+
+| Directive (`nginx.conf.template`) | Justification | Vérifié |
+|---|---|---|
+| `proxy_request_buffering off` | Par défaut, nginx **reçoit l'envoi en entier** dans un fichier temporaire avant de le transmettre au back : double écriture disque, attente avant que le back ne commence, et un `/tmp` assez grand pour 50 Mo par envoi simultané. Désactivé, l'envoi est transmis au back **au fil de l'eau** et écrit une seule fois, dans le volume. | Envoi de 40 Mo ralenti à 4 Mo/s, en regardant les fichiers ouverts par nginx (`/proc/*/fd`, car nginx supprime son fichier temporaire de l'arborescence tout en le gardant ouvert) : **1 fichier temporaire** avec la mise en tampon par défaut, **0** avec notre réglage. |
+| `proxy_http_version 1.1` + `Connection ""` | Sans mise en tampon, nginx doit pouvoir transmettre un corps envoyé par morceaux (`chunked`), ce qui n'existe qu'en HTTP/1.1. Par défaut, nginx parle HTTP/1.0 au back. | Envois de 40 Mo → `201`. |
+| `client_max_body_size ${MAX_UPLOAD_MB}m` | Inchangé : le refus (`413`) reste fait par nginx **avant** que le corps n'atteigne le back. | Envoi de 60 Mo (limite 50) → `413`. |
+| `resolver 127.0.0.11 valid=10s ipv6=off` | Le DNS interne de Docker est interrogé toutes les 10 s au plus, au lieu d'une seule fois au démarrage : les instances du back ajoutées ou retirées par `docker compose up --scale back=N` sont prises en compte **sans redémarrer nginx**. `ipv6=off` : nos réseaux sont en IPv4, inutile d'attendre des réponses AAAA. | `--scale back=3` : les 3 instances répondent à tour de rôle (`X-Served-By` différent), et la gateway n'a pas été redémarrée. Retour à 1 instance → `200`. |
+| `set $back_upstream ...` + `proxy_pass $back_upstream` | Une adresse écrite en dur dans `proxy_pass` est résolue une seule fois, au démarrage. Passer par une variable oblige nginx à utiliser le `resolver` à chaque requête. | Idem. |
+
+**Conséquence sur le démarrage :** avant, nginx refusait de démarrer s'il ne trouvait pas `back`. Maintenant, il démarre et répond `502` à `/api/` tant que le back est absent (testé : `502` sans back, `200` dès son retour). Le `depends_on: service_healthy` de la gateway reste utile pour ne pas exposer ces `502` au démarrage de la stack.
+
 ### Image de base
 
 `alpine:3.20`, comme les autres images. On n'utilise pas l'image officielle `nginx` : nginx est installé par nos soins depuis les paquets Alpine.
@@ -580,7 +592,7 @@ Résultat testé : `docker stop` arrête la gateway en moins d'une seconde.
 
 ### Build et run
 
-La gateway a besoin du back sur le même réseau Docker : nginx refuse de démarrer s'il ne trouve pas l'hôte `back`. Le front se branche ensuite sur ce réseau et joint la gateway par son nom.
+La gateway a besoin du back sur le même réseau Docker. Elle démarre même s'il est absent (le nom `back` est résolu à chaque requête), mais répond alors `502` à `/api/`. Le front se branche ensuite sur ce réseau et joint la gateway par son nom.
 
 ```bash
 docker build -t gateway ./Gateway
@@ -745,7 +757,7 @@ front:
       condition: service_healthy
 ```
 
-- La **gateway** attend que le back soit `healthy`. C'est nécessaire car nginx refuse de démarrer s'il ne peut pas résoudre `back`.
+- La **gateway** attend que le back soit `healthy`. Depuis l'ajout du `resolver`, nginx démarrerait sans le back, mais il répondrait `502` à chaque appel d'API (testé) : on ne l'ouvre qu'une fois le back prêt.
 - Le **front** attend que la gateway soit `healthy` : la page n'est servie qu'une fois que toute la chaîne vers l'API est disponible.
 
 Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de démarrage obtenu est donc : `back` → `gateway` → `front`.

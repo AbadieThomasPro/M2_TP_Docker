@@ -59,7 +59,7 @@ services:
       BACK_PORT: ${BACK_PORT}         # même variable que le back : les deux restent cohérents
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
       TZ: ${TZ}
-    # nginx refuse de démarrer s'il ne peut pas résoudre "back" : on attend qu'il soit prêt
+    # Sans back prêt, la gateway répondrait 502 à chaque appel d'API : on attend qu'il soit healthy
     depends_on:
       back:
         condition: service_healthy
