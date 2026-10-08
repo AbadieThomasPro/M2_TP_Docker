@@ -138,6 +138,7 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
 ├── AGENTS.md                # règles du projet pour les agents IA (CLAUDE.md l'importe)
+├── questui-DESIGN.md        # design system de l'interface (thème RPG médiéval)
 └── README.md
 ```
 

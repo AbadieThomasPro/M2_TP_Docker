@@ -25,6 +25,7 @@ Navigateur ──:8080──▶ front ──http://gateway/api──▶ gateway 
 | `Backend/` | alpine + nodejs + tini | API : `GET /api/phrase`, `GET /health`. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne`, ressources, healthchecks, ordre back → gateway → front. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
+| `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
 ## Commandes
 
@@ -70,6 +71,13 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - **ENV** = valeurs par défaut dans l'image : l'image doit fonctionner seule, sans compose.
 - **`.env`** = valeurs du déploiement, injectées par le compose (`build.args` pour les ARG, `environment:` pour les ENV, `deploy.resources` / `ports`). Aucune valeur en dur dans le compose, sauf les noms de service (`back`, `gateway`).
 - Toute nouvelle variable : défaut en ENV + entrée commentée dans `.env` + passage dans le compose + ligne dans le README.
+
+### Interface (design)
+- L'interface du front suit le design system **[questui-DESIGN.md](questui-DESIGN.md)** (« QuestUI », thème RPG médiéval) : couleurs, typographie (Cinzel / Spectral / Fira Code), espacements, rayons, ombres dorées, composants (boutons, cartes, inputs, listes, chips) et leurs règles « Do / Don't ».
+- Valeurs définies **une seule fois** en variables CSS (`:root { --color-primary: #CA8A04; ... }`) dans le style global, puis réutilisées : aucune couleur ni taille en dur dans les composants.
+- Rester simple (cours Docker, pas web) : CSS natif, sans librairie UI (pas de Material ni de Tailwind). Seuls les composants utiles à l'appli sont implémentés : bouton primaire / destructif, carte, input fichier, liste de fichiers, chip de statut.
+- Points clés du système : fond `#1A0F0A` (jamais de noir pur), texte parchemin `#F5E6D3` (jamais de blanc pur), titres et libellés en Cinzel, corps en Spectral (pas de sans-serif), lueur dorée sur les éléments actifs, animations sobres (300 ms).
+- Polices chargées depuis Google Fonts par le navigateur : aucune dépendance ajoutée dans les images Docker.
 
 ### Documentation
 - Chaque changement d'image ou du compose met à jour le **README.md** (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources).
