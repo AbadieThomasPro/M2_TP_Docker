@@ -19,16 +19,26 @@ RUN apk add --no-cache nodejs tini tzdata
 # Utilisateur dédié, distinct du front : en cas de faille, l'attaquant n'est pas root
 RUN adduser -D -H back
 
+# Dossier de stockage créé et donné à "back" AVANT le VOLUME : Docker recopie ces droits
+# dans un volume neuf, sinon il appartiendrait à root et l'API (non-root) ne pourrait pas y écrire
+RUN mkdir -p /data/files && chown -R back:back /data
+
+# Données hors de la couche du conteneur : elles survivent à sa suppression et à un rebuild,
+# même lancé sans compose (Docker crée alors un volume anonyme au lieu d'écrire dans le conteneur)
+VOLUME /data
+
 # Port en ARG : une seule valeur pour EXPOSE et ENV PORT, qui restent donc cohérents
 ARG PORT=3000
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
 # NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire
 # PHRASE en ENV : changer la réponse de l'API ne demande pas de rebuild
+# STORAGE_DIR en ENV : le code lit le chemin au lieu de l'écrire en dur (doit rester sous /data, le volume)
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
     NODE_OPTIONS="--max-old-space-size=128" \
-    PHRASE="Hello World depuis le back !"
+    PHRASE="Hello World depuis le back !" \
+    STORAGE_DIR=/data/files
 
 # Indique à l'utilisateur de l'image le port de l'API
 EXPOSE ${PORT}

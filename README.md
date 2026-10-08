@@ -31,7 +31,8 @@ Un service de stockage de fichiers simplifié, à la manière d'un Google Drive 
 |---|---|
 | 3 images (front, back, gateway), compose, réseaux, healthchecks, SIGTERM | ✅ Fait |
 | Chaîne front → gateway → back fonctionnelle (`/api/phrase`) | ✅ Fait |
-| API de fichiers (upload, liste, téléchargement, suppression) + volume | ⏳ À faire |
+| Volume `stockage` monté sur le back (droits, persistance testés) | ✅ Fait |
+| API de fichiers (upload, liste, téléchargement, suppression) | ⏳ À faire |
 | Interface web du stockage | ⏳ À faire |
 | Scalabilité du back (plusieurs instances, répartition par nginx) | ⏳ À faire |
 
@@ -323,6 +324,8 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 |---|---|
 | `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
 | `RUN adduser -D -H back` | Crée un utilisateur `back` sans mot de passe ni dossier personnel. L'API ne tourne pas en root. Un utilisateur distinct de celui du front permet d'identifier chaque service. |
+| `RUN mkdir -p /data/files && chown -R back:back /data` | Crée le dossier de stockage et le donne à `back` **avant** l'instruction `VOLUME`. Quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. Sans ce `chown`, le volume appartiendrait à root et l'API, non-root, ne pourrait pas écrire. Vérifié : `/data` et `/data/files` appartiennent à `back`. |
+| `VOLUME /data` | Déclare `/data` comme dossier de données hors de la couche du conteneur. Même avec un simple `docker run`, sans compose, Docker crée un volume anonyme au lieu d'écrire dans le conteneur. Toute instruction placée après `VOLUME` qui modifierait `/data` serait ignorée : d'où le `chown` juste avant. |
 | `WORKDIR /app` | Dossier de travail de l'application. |
 | `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Tout le code est dans `src/`, car l'API ne sert aucun fichier statique à séparer du code serveur. |
 | `USER back` | Bascule sur l'utilisateur non-root pour l'exécution. |
@@ -347,6 +350,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 | `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
 | `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
 | `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
+| `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -515,7 +519,7 @@ Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .en
 
 | Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
 |---|---|---|---|
-| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
 | `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `MAX_UPLOAD_MB`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT`, `MAX_UPLOAD_MB` |
 | `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 
@@ -570,6 +574,33 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 | `back` | 0,47 s | `0` ✅ |
 
 `restart: unless-stopped` relance automatiquement un conteneur qui plante, sauf s'il a été arrêté volontairement.
+
+### Volume
+
+```yaml
+back:
+  volumes:
+    - stockage:/data
+volumes:
+  stockage:
+```
+
+| Choix | Justification |
+|---|---|
+| Un volume, donc des données hors du conteneur | Les fichiers du cloud doivent survivre à l'arrêt, à la suppression et à la reconstruction du conteneur : la couche d'écriture d'un conteneur disparaît avec lui. |
+| **Volume nommé** plutôt que bind mount | Recommandé par le cours : géré par Docker (`docker volume ls / inspect`), isolé de l'hôte et **portable**. Un bind mount dépend d'un chemin propre à la machine et casserait sur un autre poste, notamment sous Windows. |
+| Nommé dans le compose, en plus du `VOLUME` du Dockerfile | Le `VOLUME` seul crée un volume **anonyme différent** à chaque `up` : on perdrait l'accès aux données. Le nom `stockage` garantit que c'est le même volume qui est remonté à chaque fois. |
+| Monté uniquement dans le back | Seule l'API manipule les fichiers. Ni le front ni la gateway n'y ont accès (moindre privilège). |
+
+**Cycle de vie** (vérifié) :
+
+| Commande | Effet sur les fichiers |
+|---|---|
+| `docker compose down` puis `up` | ✅ Conservés : un fichier écrit par `back` est toujours là après le redémarrage. |
+| `docker compose up --build` (rebuild) | ✅ Conservés : le volume est indépendant de l'image. |
+| `docker compose down -v` | ❌ Supprimés : le volume `docker-cloud_stockage` est détruit. |
+
+Commandes utiles : `docker volume inspect docker-cloud_stockage` (emplacement sur l'hôte Docker), `docker compose exec back ls -l /data/files`.
 
 ### Réseaux
 

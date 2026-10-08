@@ -18,7 +18,12 @@ services:
       # Tas Node sous la limite mémoire : Node libère avant d'être tué (OOM)
       NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
       PHRASE: ${BACK_PHRASE}
+      STORAGE_DIR: ${STORAGE_DIR}
       TZ: ${TZ}
+    # Volume nommé plutôt que bind mount : géré par Docker, portable (pas de chemin propre à la machine)
+    # et réutilisé à chaque up, alors que le VOLUME seul créerait un volume anonyme différent à chaque fois
+    volumes:
+      - stockage:/data
     # Plafond pour qu'un service ne prive pas les autres de ressources ; minimum garanti en réservation
     deploy:
       resources:
@@ -107,3 +112,7 @@ networks:
   # internal: true pour couper tout accès extérieur à la gateway et au back, qui n'en ont pas besoin
   interne:
     internal: true
+
+volumes:
+  # Fichiers du cloud : seul le back y accède, ils survivent à down et aux rebuilds (supprimés par down -v)
+  stockage:
