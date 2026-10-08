@@ -22,6 +22,12 @@ ARG STORAGE_GID=1500
 # des fichiers, et le groupe partagé ne servirait plus à rien (seuls les numéros comptent, pas les noms)
 RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -u 1002 -G stockage cleaner
 
+# Même dossier de stockage que l'image du back (groupe stockage, 2775 setgid) : le premier conteneur
+# qui monte un volume vide y recopie ce dossier. En compose, depends_on fait passer le back en premier ;
+# en Swarm il n'y a pas d'ordre de démarrage, et sans ce dossier le cleaner initialiserait le volume
+# avec un /data appartenant à root, où le back ne pourrait plus écrire. Ainsi l'ordre n'a plus d'importance
+RUN mkdir -p /data/files/.incoming && chown -R cleaner:stockage /data && chmod -R 2775 /data
+
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
 # CLEANUP_INTERVAL_S : délai entre deux passes ; INCOMING_MAX_AGE_MIN : âge d'un envoi considéré abandonné
 ENV STORAGE_DIR=/data/files \
@@ -29,8 +35,8 @@ ENV STORAGE_DIR=/data/files \
     INCOMING_MAX_AGE_MIN=60 \
     HEARTBEAT_FILE=/tmp/heartbeat
 
-# Pas de VOLUME /data : lancé seul, le worker n'a rien à nettoyer ; c'est le compose qui lui
-# partage le volume du back (un VOLUME créerait ici un volume anonyme vide et trompeur)
+# Pas de VOLUME /data : lancé seul, le worker n'a rien à nettoyer ; c'est le compose (ou la stack Swarm)
+# qui lui partage le volume du back (un VOLUME créerait ici un volume anonyme vide et trompeur)
 
 # Script copié en dernier (ce qui change le plus) ; --chmod évite un RUN chmod, donc une couche
 COPY --chmod=755 cleanup.sh /usr/local/bin/cleanup.sh

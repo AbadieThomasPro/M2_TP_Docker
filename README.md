@@ -46,7 +46,7 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 | Isolation réseau | Seul le front est publié. La gateway et le back restent sur deux réseaux internes séparés : le front ne peut joindre le back qu'à travers la gateway. |
 | Arguments au run | Durée de vie par défaut et maximale, quota de stockage, taille max d'envoi : réglables dans le `.env`, sans rebuild. |
 | Limitation des ressources | CPU et mémoire par conteneur, dimensionnés par un benchmark, plus une taille max d'envoi et un quota de stockage. |
-| Scalabilité | Plusieurs instances du back derrière la gateway nginx. L'expiration est inscrite dans le nom des fichiers, donc le back reste sans état (voir [Scalabilité](#scalabilité)). |
+| Scalabilité | **Docker Swarm** : 3 instances du back (sans état : l'expiration est inscrite dans le nom des fichiers), montée en charge à chaud, auto-réparation, mise à jour sans coupure, réservations et plafond pour ne pas saturer la machine (voir [Scalabilité](#scalabilité)). |
 
 ### Avancement
 
@@ -63,7 +63,7 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 | Image front multi-stage servant l'application Angular, stack passée en Alpine 3.22 | ✅ Fait |
 | Benchmark sur l'application réelle, CPU redosés (back 0,65 / front 0,25 / gateway 0,10) | ✅ Fait |
 | Tests de bout en bout : cycle de vie complet d'un fichier, persistance, arrêt propre | ✅ Fait |
-| Démonstration du scaling | ⏳ À faire (bonus) |
+| Scalabilité avec Docker Swarm : 3 back, montée en charge, auto-réparation, mise à jour sans coupure, garde-fous de ressources | ✅ Fait |
 
 ---
 
@@ -104,6 +104,8 @@ docker compose down -v                # idem, en supprimant aussi le volume (les
 ```
 
 Tous les réglages (versions, ports, durées de vie, quotas, CPU, mémoire) sont dans le fichier [`.env`](.env) : modifier une valeur puis relancer `docker compose up -d --build`.
+
+**Mode Swarm** (3 instances du back, montée en charge, auto-réparation) : `docker swarm init` une seule fois, puis `swarm-deploy.ps1` (Windows) ou `swarm-deploy.sh` (Linux / macOS). Détails dans [Scalabilité](#scalabilité). Arrêt d'urgence si la machine sature : `docker swarm leave --force`.
 
 > Sur certains postes Windows, `localhost:8080` peut être intercepté par WSL (`wslrelay`) : utiliser `127.0.0.1:8080`.
 
@@ -247,7 +249,9 @@ Chaque service attend que le précédent soit `healthy` (`depends_on: condition:
 ├── docs/
 │   ├── architecture.png     # export image du schéma d'architecture (Mermaid)
 │   └── interface.png        # capture de l'interface
-├── docker-compose.yml       # orchestration des 3 conteneurs
+├── docker-compose.yml       # orchestration principale (Docker Compose)
+├── docker-stack.yml         # déploiement Swarm : 3 instances du back, mises à jour progressives
+├── swarm-deploy.ps1 / .sh   # construit les images, charge le .env, déploie la stack Swarm
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
 ├── .gitignore               # node_modules, builds Angular, logs
@@ -738,6 +742,7 @@ Ce n'est pas un serveur : pas de port, pas de réseau, et un healthcheck qui ne 
 |---|---|
 | `RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -u 1002 -G stockage cleaner` | Utilisateur dédié `cleaner`, non-root, membre du groupe `stockage` **avec le même GID que le back** (ARG fourni par le `.env`). Supprimer un fichier demande le droit d'écriture sur le **dossier** : le dossier de stockage est en `2775` groupe `stockage`, le cleaner peut donc supprimer sans être root ni être `back`. |
 | UID fixé à `1002` (et `1001` pour le back) | **Problème constaté en test** : par défaut, `adduser` donne l'UID 1000 au premier utilisateur de chaque image, donc `back` et `cleaner` avaient le même UID. Pour le noyau, seuls les numéros comptent : le cleaner était vu comme le **propriétaire** du dossier, avec tous les droits, et le groupe partagé ne servait à rien (il supprimait même dans un dossier en `755`). Avec des UID distincts, ce sont bien les droits du groupe qui s'appliquent. |
+| `RUN mkdir -p /data/files/.incoming && chown -R cleaner:stockage /data && chmod -R 2775 /data` | Le même dossier de stockage que dans l'image du back. En compose, `depends_on` fait démarrer le back en premier, et c'est son image qui initialise le volume. En **Swarm**, il n'y a pas d'ordre de démarrage : si le cleaner montait le volume vide en premier sans ce dossier, le volume serait initialisé avec un `/data` appartenant à root, et le back ne pourrait plus écrire. Avec ce dossier dans les deux images, l'ordre n'a plus d'importance (vérifié : volume initialisé par le cleaner, le back y écrit). |
 | `COPY --chmod=755 cleanup.sh /usr/local/bin/` | Script exécutable dès la copie (pas de `RUN chmod`, donc une couche de moins), copié en dernier car c'est ce qui change le plus. |
 | Pas de `VOLUME /data` | Lancé seul, le worker n'a rien à nettoyer : c'est le compose qui lui partage le volume du back. Un `VOLUME` créerait ici un volume anonyme vide et trompeur. |
 | `USER cleaner` | Exécution sans root. |
@@ -1132,57 +1137,150 @@ Le premier lancement d'`ab` restait **bloqué** après environ 500 requêtes. Le
 
 ## Scalabilité
 
-L'objectif est de pouvoir lancer **plusieurs instances du back** avec une seule commande, sans changer de configuration. La gateway nginx répartit les requêtes entre elles.
+La montée en charge se fait avec **Docker Swarm**, l'orchestrateur natif de Docker : plusieurs instances du back, réparties automatiquement, relancées si elles tombent, et mises à jour sans coupure.
 
-### Principe
+### Déploiement
 
-| Élément | Rôle dans la scalabilité |
+```bash
+docker swarm init                                            # une seule fois : la machine devient un nœud Swarm
+powershell -ExecutionPolicy Bypass -File swarm-deploy.ps1    # Windows   (ou ./swarm-deploy.sh sous Linux / macOS)
+docker stack services cloud                                  # back 3/3, cleaner 1/1, front 1/1, gateway 1/1
+docker service scale cloud_back=5                            # montée en charge à chaud
+docker stack rm cloud                                        # retrait de la stack (le volume est conservé)
+```
+
+L'application reste sur **http://127.0.0.1:8080**. La stack Swarm et le compose publient tous les deux ce port : on utilise l'un **ou** l'autre.
+
+> **Arrêt d'urgence** : si la stack consomme trop de RAM ou de CPU et que la machine ralentit, `docker swarm leave --force` quitte le mode Swarm et arrête **toutes** les instances d'un coup (les volumes, donc les fichiers, sont conservés). Plus doux, si la machine répond encore : `docker stack rm cloud` ou `docker service scale cloud_back=1`.
+
+### Pourquoi le compose reste, et pourquoi un fichier Swarm séparé
+
+`docker-compose.yml` reste le fichier principal, et `docker-stack.yml` s'ajoute pour Swarm. Transformer le compose en stack Swarm aurait fait perdre des choses que la stack utilise et que le barème note, car `docker stack deploy` les ignore ou les refuse :
+
+| Élément du compose | En Swarm | Comment c'est traité dans `docker-stack.yml` |
+|---|---|---|
+| `depends_on: condition: service_healthy` | **Refusé** (ancien format compose v3 : liste simple seulement) | Pas d'ordre de démarrage en Swarm : une instance non `healthy` ne reçoit pas de trafic, et une instance qui échoue est relancée. Le cas des droits du volume est réglé autrement (voir plus bas). |
+| `memswap_limit` | **Refusé** (« forbidden property ») | Absent : la limite mémoire est appliquée, mais la swap n'est plus désactivée (limite assumée). |
+| `build:` | Ignoré | Les images sont construites par `docker compose build` (dans le script), puis utilisées par Swarm (`image: docker-cloud/*`). |
+| `network_mode: none` (cleaner) | Ignoré : le cleaner aurait été branché sur un réseau par défaut, avec Internet | Réseau overlay **`isole`**, `internal: true`, dont le cleaner est le seul membre (vérifié : aucun accès au back ni à Internet). |
+| `restart: unless-stopped` | Ignoré | `deploy.restart_policy: on-failure`. |
+| `tmpfs: - /tmp:size=8m` | Forme courte non prise en charge | Forme longue `type: tmpfs` avec une taille en octets. |
+| `.env` | **Non lu** par `docker stack deploy` | Le script `swarm-deploy.ps1` / `.sh` charge le `.env` dans l'environnement avant de déployer. |
+
+Un fichier de **surcharge** (compose + petit fichier de différences) a été essayé en premier, pour ne rien répéter : `docker stack deploy` le refuse justement à cause de `depends_on` et `memswap_limit` (testé). Il aurait fallu dégrader le compose. `docker-stack.yml` est donc **autonome**, mais seule sa **structure** est répétée : toutes les **valeurs** (versions, ports, CPU, mémoire, durées de vie) viennent du même `.env`.
+
+### Ce que Swarm ajoute
+
+| Réglage (`docker-stack.yml`) | Rôle |
 |---|---|
-| `docker compose up --scale back=3` (ou `deploy.replicas: 3`) | Lance 3 conteneurs identiques à partir de la même image `back`. |
-| DNS interne Docker | Le nom de service `back` renvoie les adresses IP de **toutes** les instances. |
-| nginx (`upstream`) | Répartit les requêtes `/api` entre les instances (round-robin par défaut). |
-| Volume partagé | Toutes les instances lisent et écrivent dans le **même** volume `stockage` : un fichier envoyé via `back #1` est téléchargeable via `back #3`. |
+| `back.deploy.replicas: 3` | 3 instances du back, le service le plus coûteux (voir [Benchmark](#benchmark--comment-les-limites-ont-été-choisies)). Swarm donne au service `back` une **adresse virtuelle** et répartit les connexions entre les instances : la gateway n'a rien à connaître. |
+| `cleaner.deploy.replicas: 1` | **Toujours un seul** worker, quel que soit le nombre de back : plusieurs supprimeraient les mêmes fichiers en même temps. |
+| `restart_policy: on-failure` | Auto-réparation : une instance qui tombe est recréée. |
+| `update_config: parallelism 1, order start-first, failure_action rollback` | Mise à jour progressive : une instance à la fois, la nouvelle doit être `healthy` avant l'arrêt de l'ancienne, retour arrière automatique en cas d'échec. |
+| Réseaux `driver: overlay` | Le type de réseau de Swarm, qui peut s'étendre sur plusieurs machines. Les mêmes réseaux que le compose (`public`, `interne-front`, `interne-back`), plus `isole`. |
+| Front et gateway à **0,75 et 0,30 CPU** (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) | Plus que dans le compose (0,25 et 0,10), parce qu'ils relaient le trafic de 3 back : voir le benchmark ci-dessous. |
 
-### Conditions pour que ça fonctionne
+### Conditions pour que la réplication fonctionne
 
-1. **Back sans état (stateless)** : aucune donnée n'est gardée en mémoire dans le conteneur. Les fichiers et leurs informations (nom, taille, date) sont lus directement depuis le volume. N'importe quelle instance peut donc répondre à n'importe quelle requête.
-2. **Pas de port publié sur le back** : plusieurs instances ne pourraient pas publier le même port sur la machine hôte. C'est déjà le cas, puisque seul le front est publié. C'est la gateway qui rend le scaling possible.
-3. **Pas de `container_name`** sur le back : Docker doit pouvoir nommer lui-même chaque instance (`back-1`, `back-2`...).
-4. **nginx doit voir les nouvelles instances** : ✅ en place. La gateway interroge le DNS de Docker (`resolver 127.0.0.11 valid=10s`) au lieu de résoudre `back` une seule fois au démarrage. Testé : avec `--scale back=3`, les 3 instances répondent sans redémarrer nginx.
-5. **Noms de fichiers uniques** : deux instances qui écrivent en même temps ne doivent pas écraser le même fichier. On peut par exemple préfixer chaque nom par un identifiant unique.
+| Condition | Comment elle est remplie |
+|---|---|
+| **Back sans état** | L'expiration est inscrite dans le nom des fichiers et les fichiers sont dans un volume partagé : aucune donnée en mémoire, n'importe quelle instance répond à n'importe quelle requête. Vérifié : 3 instances différentes répondent, et chacune voit tous les fichiers. |
+| Pas de port publié sur le back | Seul le front est publié ; la gateway est le seul accès au back. |
+| Noms de fichiers uniques | Préfixe aléatoire : deux instances qui écrivent en même temps n'écrasent rien. |
+| La gateway voit les nouvelles instances | En compose : `resolver 127.0.0.11` (DNS Docker interrogé toutes les 10 s). En Swarm : adresse virtuelle du service `back`, répartie par Swarm lui-même. |
+| **Volume utilisable quel que soit l'ordre de démarrage** | Sans `depends_on`, Swarm peut démarrer le cleaner avant le back. Le premier conteneur qui monte un volume vide y recopie le dossier de son image : l'image du cleaner contient donc **le même dossier** que celle du back (`/data/files/.incoming`, groupe `stockage`, `2775`). Vérifié : volume neuf initialisé par le cleaner (`drwxrwsr-x cleaner stockage`), le back y écrit quand même (`201`). |
 
-### Ressources
+### Ressources : limites, réservations et plafond
 
-Les limites de `deploy.resources` s'appliquent **à chaque instance**. Avec 3 instances du back à 0,65 CPU et 128 Mo, le back peut consommer au total 1,95 CPU et 384 Mo. Le benchmark montre aussi qu'il faudra augmenter la gateway et le front en proportion (rapport de coûts mesuré back / front / gateway ≈ 7 / 3 / 1), sinon ils deviendront le goulot (voir [Benchmark](#benchmark--comment-les-limites-ont-été-choisies)). Le nombre d'instances se choisit en fonction des ressources de la machine.
+Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : elles protègent d'une instance qui s'emballe, mais **pas d'une multiplication des instances** (5 back × 0,65 CPU = 3,25 CPU). Swarm n'a pas d'auto-scaling natif (le nombre d'instances ne change que sur commande), mais une commande excessive ou un outil externe pourrait saturer la machine. Deux garde-fous sont donc ajoutés :
 
-### Démonstration prévue
+| Garde-fou | Réglage | Test |
+|---|---|---|
+| **Réservations CPU et mémoire** | `reservations.cpus` : back 0,30, front 0,10, gateway et cleaner 0,05 (la stack de base réserve ~1,1 CPU sur les 12 de la machine) | Le planificateur ne place une instance que si les ressources réservées sont disponibles. Test volontairement excessif, 5 CPU réservés par instance du back : la 3e reste **`Pending`** (« no suitable node (insufficient resources) »), l'ancienne instance continue de tourner (`start-first`), l'application répond toujours `200`. |
+| **Plafond par machine** | `placement.max_replicas_per_node: 6` (`BACK_MAX_REPLICAS_PER_NODE`) : au pire 3,9 CPU et 768 Mo, environ un tiers de la machine | 9 instances demandées : **6 tournent, les autres restent `Pending`** (« no suitable node (max replicas per node) »). |
 
-Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du conteneur qui a répondu. En rafraîchissant la page, on voit les requêtes passer d'une instance à l'autre, alors que tous les fichiers restent visibles.
+### Démonstrations (mesurées)
+
+| Démonstration | Commande | Résultat |
+|---|---|---|
+| Répartition | requêtes successives sur `/api/files` | 3 valeurs différentes de `X-Served-By`, mêmes fichiers vus partout |
+| **Montée en charge à chaud** | `docker service scale cloud_back=5` | 5/5 en 17 s, 5 instances différentes répondent |
+| **Auto-réparation** | `docker kill` d'une instance du back | Recréée en 13 s ; **179 requêtes pendant ce temps, 0 erreur** |
+| **Mise à jour sans coupure** | `docker service update --force cloud_back` | 3 instances remplacées une par une en 61 s ; **520 requêtes pendant ce temps, 0 erreur** |
+| Arrêt propre des instances retirées | `docker service scale cloud_back=1` | `Exited (0)` pour chaque instance arrêtée |
+| **Persistance** | `docker stack rm cloud` puis redéploiement | Volume conservé, fichier intact |
+| Isolation | `wget` depuis les conteneurs | Cleaner : seul son réseau `isole`, ni back ni Internet ; front → back bloqué ; back sans Internet |
+
+### Benchmark en mode Swarm
+
+`ab` est lancé comme service Swarm ponctuel sur le réseau `public` de la stack : il attaque le front comme le service `bench` du compose, les mesures sont donc comparables (route `/api/files`, 20 fichiers, 5 000 requêtes à 50 en parallèle).
+
+| Configuration | Req/s | p95 | Échecs |
+|---|---|---|---|
+| Compose : 1 back (référence, benchmark étape 6) | 166 | 389 ms | 0 |
+| Swarm : 1 back, front 0,25 / gateway 0,10 | 153 | 611 ms | 0 |
+| Swarm : 3 back, front 0,25 / gateway 0,10 | 153 | 539 ms | 0 |
+| Swarm : 5 back, front 0,25 / gateway 0,10 | 154 | 502 ms | 0 |
+| Swarm : 5 back, front 0,75 / gateway 0,30 | 417 | 210 ms | 0 |
+| **Swarm, stack par défaut : 3 back, front 0,75 / gateway 0,30** | **431 à 574** | **197 à 278 ms** | **0** |
+
+**Ajouter des instances du back ne suffit pas.** Avec 3 ou 5 back mais un front et une gateway au dosage du compose, le débit ne bouge pas : le goulot s'est simplement déplacé vers le front et la gateway. En leur donnant du CPU dans le rapport de coûts mesuré (back / front / gateway ≈ 7 / 3 / 1), le débit est multiplié par **2,8 à 3,7** par rapport au compose. Dans la stack par défaut, les trois services arrivent ensemble près de leur limite (pics : back 68 %, front 68 %, gateway 31 %) : le dosage est équilibré.
+
+### Limites assumées
+
+- **Un seul nœud.** Plusieurs machines demanderaient un registre d'images partagé (l'image `registry:2` vient du Docker Hub, interdite par le sujet) et un stockage partagé entre machines (un volume local n'existe que sur sa machine ; il faudrait NFS ou équivalent).
+- **Pas d'auto-scaling natif** : le nombre d'instances est fixé (`replicas`) ou changé à la main (`docker service scale`), comme le précise le cours. Il faudrait un outil externe qui déclenche le scale selon la charge.
+- **Swap non désactivable** en Swarm (`memswap_limit` refusé).
+- Les instances arrêtées restent visibles quelques minutes (`docker ps -a`) : c'est l'historique des tâches de Swarm.
+
+### Architecture en mode Swarm
+
+```mermaid
+flowchart TB
+  nav(["🌐 Navigateur"])
+  subgraph swarm["Nœud Swarm unique · stack « cloud »"]
+    direction TB
+    front["<b>front</b> · 1 instance<br/>0,75 CPU"]
+    gateway["<b>gateway</b> · 1 instance<br/>0,30 CPU"]
+    vip{{"adresse virtuelle<br/>du service back"}}
+    b1["<b>back #1</b><br/>0,65 CPU"]
+    b2["<b>back #2</b><br/>0,65 CPU"]
+    b3["<b>back #3</b><br/>0,65 CPU"]
+    vol[("volume <b>cloud_stockage</b>")]
+    subgraph isole["réseau isole (internal)"]
+      cleaner["<b>cleaner</b> · toujours 1 instance"]
+    end
+  end
+  nav <-- ":8080 (routing mesh)" --> front
+  front <-- "interne-front" --> gateway
+  gateway <-- "interne-back" --> vip
+  vip <--> b1
+  vip <--> b2
+  vip <--> b3
+  b1 <--> vol
+  b2 <--> vol
+  b3 <--> vol
+  cleaner <-- "suppression des expirés" --> vol
+
+  classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
+  classDef int fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
+  classDef data fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
+  classDef iso fill:#fdf0e2,stroke:#d9771a,color:#1b2330
+  class front pub
+  class gateway,vip,b1,b2,b3 int
+  class vol data
+  class cleaner iso
+```
 
 ### Pourquoi c'est un avantage de Docker par rapport aux VM
 
-| | Machines virtuelles | Conteneurs Docker |
+| | Machines virtuelles | Conteneurs Docker (mesuré sur cette stack) |
 |---|---|---|
-| Ajouter une instance | Créer et démarrer une VM complète (OS invité) : plusieurs minutes, plusieurs Go | Une commande (`--scale`) : quelques secondes, quelques Mo de mémoire par instance |
-| Configuration | À reproduire sur chaque VM | Identique pour toutes les instances, car elles viennent de la même image |
-| Ressources | Réservées par VM, même au repos | Partagées avec le noyau de l'hôte, limitées par conteneur (`cpus`, `memory`) |
-
-### Architecture cible
-
-```
-  Navigateur
-      │ :8080
-      ▼
-  ┌─────────┐  http://gateway/api  ┌─────────┐   répartition    ┌─────────┐
-  │  front  │ ───────────────────▶ │ gateway │ ───────────────▶ │ back #1 │──┐
-  └─────────┘                      │  nginx  │ ──────┐          └─────────┘  │
-                                   └─────────┘       │          ┌─────────┐  │   ┌────────────────┐
-                                                     ├────────▶ │ back #2 │──┼──▶│ volume Docker  │
-                                                     │          └─────────┘  │   │ "stockage"     │
-                                                     │          ┌─────────┐  │   │ /data/fichiers │
-                                                     └────────▶ │ back #3 │──┘   └────────────────┘
-                                                                └─────────┘
-```
+| Ajouter une instance | Créer et démarrer une VM complète (OS invité) : plusieurs minutes, plusieurs Go | `docker service scale` : 2 instances de plus en **17 s**, environ **27 Mo** de mémoire chacune |
+| Remplacer une instance en panne | Intervention, ou outillage dédié | Automatique : **13 s**, sans aucune requête perdue |
+| Mettre à jour | Arrêt de service, ou bascule manuelle | Remplacement progressif : **0 erreur** sur 520 requêtes |
+| Empreinte de toute l'application | Un OS complet par VM | **~100 Mo** de RAM au repos pour les 6 conteneurs |
+| Configuration | À reproduire sur chaque VM | Identique pour toutes les instances : elles viennent de la même image |
 
 ---
 
@@ -1210,7 +1308,13 @@ Récapitulatif des vérifications faites sur la stack finale (Alpine 3.22, limit
 | Dépassement mémoire | Back limité à 6 Mo sans swap | Tué (`OOMKilled`, code `137`) puis relancé par `restart: unless-stopped` |
 | Arrêt propre | `docker compose stop` de chaque service | **Code de sortie `0`** pour les 4, en moins d'une seconde |
 | Arrêt du worker en pleine passe | SIGTERM pendant la suppression de 10 000 fichiers | Code `0` dans 6 cas sur 6, reprise au redémarrage |
-| Charge | 5 000 requêtes, 50 en parallèle sur la liste | 166 req/s, p95 389 ms, **0 échec** |
+| Charge | 5 000 requêtes, 50 en parallèle sur la liste | Compose : 166 req/s, p95 389 ms ; Swarm (3 back) : 431 à 574 req/s, p95 197 à 278 ms ; **0 échec** |
+| Swarm : montée en charge | `docker service scale cloud_back=5` | 5/5 en 17 s, 5 instances répondent |
+| Swarm : auto-réparation | `docker kill` d'une instance | Recréée en 13 s, 0 erreur sur 179 requêtes |
+| Swarm : mise à jour | `docker service update --force cloud_back` | 0 erreur sur 520 requêtes |
+| Swarm : garde-fous | 9 instances demandées (plafond 6) ; 5 CPU réservés par instance | Instances en trop `Pending`, application toujours disponible |
+| Swarm : ordre de démarrage | Volume neuf initialisé par le cleaner | Le back y écrit quand même (`201`) |
+| Swarm : persistance | `docker stack rm` puis redéploiement | Fichiers intacts |
 
 **Défauts trouvés par ces tests et corrigés** (détaillés dans leurs parties) : front qui contournait la gateway (réseaux séparés), client bloqué après un `413` (relais), clients HTTP/1.0 bloqués (en-têtes hop-by-hop), limites mémoire doublées par la swap (`memswap_limit`), UID identiques entre back et cleaner (UID explicites), worker tué en pleine passe (`setsid`), téléchargements tronqués avec un `tmpfs` (`proxy_max_temp_file_size 0`), back devenu goulot avec l'application réelle (CPU redosés), gateway proche de sa limite mémoire pendant des envois parallèles (48 Mo).
 

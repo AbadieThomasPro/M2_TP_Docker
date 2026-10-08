@@ -26,6 +26,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `Frontend/` | multi-stage : `build` (alpine + nodejs + npm, `ng build`) puis alpine + nodejs + tini | Sert l'application Angular compilée (`public/`, depuis `app/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health`. Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
+| `docker-stack.yml` + `swarm-deploy.ps1/.sh` | – | Déploiement Swarm : 3 back, 1 cleaner (réseau `isole`), réservations, plafond, mises à jour progressives. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
 | `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
@@ -124,6 +125,27 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 | `../features/Compte rendu/` | Comptes rendus de séance (`compte-rendu-seance-N.md`) |
 | `../../Cours-1-Docker.html`, `../../Note_Docker.txt` | Cours de référence pour vérifier les bonnes pratiques |
 | `../Activité 2 séances.pdf`, `TP - Docker Cloud (1).pdf` | Consignes de la séance et sujet du TP |
+
+## Swarm
+
+- `docker-compose.yml` reste le fichier principal ; `docker-stack.yml` est un fichier **autonome** pour Swarm (une surcharge est refusée par `docker stack deploy` : `depends_on` en forme longue et `memswap_limit` interdits). Seule la structure est répétée, **toutes les valeurs viennent du `.env`**.
+- Déploiement : `docker swarm init` (une fois), puis `swarm-deploy.ps1` / `swarm-deploy.sh` (construit les images, **charge le `.env`**, que `docker stack deploy` ne lit pas, puis déploie). Retrait : `docker stack rm cloud`.
+- **Toute modification d'un service (variable, ressource, réseau, volume) se fait dans les deux fichiers** et se vérifie dans les deux modes. La stack Swarm et le compose publient tous deux le port 8080 : jamais les deux en même temps.
+- En Swarm, front et gateway ont plus de CPU (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) : ils relaient 3 back (rapport de coûts mesuré 7 / 3 / 1). Réservations CPU et plafond `BACK_MAX_REPLICAS_PER_NODE` = garde-fous contre une multiplication des instances.
+- Un seul `cleaner`, toujours. L'image du cleaner initialise aussi le dossier du volume (pas d'ordre de démarrage en Swarm).
+- Bench en Swarm : `ab` lancé comme service ponctuel sur `cloud_public` (pas via `host.docker.internal`, non comparable et instable sous forte charge).
+
+### Arrêt d'urgence
+
+Si la stack Swarm commence à trop consommer de RAM ou de CPU (machine qui rame, ventilateurs à fond, `docker stats` qui s'emballe), **arrêter immédiatement** :
+
+```bash
+docker swarm leave --force   # quitte le mode Swarm : tous les services et toutes les instances sont arrêtés
+```
+
+- C'est le plus radical : tous les services Swarm disparaissent d'un coup. Les **volumes sont conservés** (les fichiers stockés ne sont pas perdus). Réactiver ensuite avec `docker swarm init`.
+- Plus doux, si la machine répond encore : `docker stack rm cloud` (retire la stack, garde le mode Swarm) ou `docker service scale cloud_back=1`.
+- Pendant les démonstrations de montée en charge, surveiller `docker stats` et garder la main sur ces commandes. Ne jamais dépasser les plafonds du `.env` (`BACK_MAX_REPLICAS_PER_NODE`).
 
 ## Pièges connus (poste Windows)
 - PowerShell 5.1 lit les scripts `.ps1` en ANSI : éviter les remplacements de texte accentué par script. Pour modifier des fichiers, utiliser l'outil d'édition, ou Node.
