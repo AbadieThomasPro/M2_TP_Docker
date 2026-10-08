@@ -1,0 +1,4 @@
+# Seul le Dockerfile sert au build : le script de mesure s'exécute sur l'hôte, pas dans l'image
+*.ps1
+*.md
+.dockerignore

@@ -32,6 +32,9 @@ services:
           memory: ${BACK_MEMORY}
         reservations:
           memory: ${BACK_MEMORY_RESERVATION}
+    # Swap égal à la limite = pas de swap : sinon Docker double la limite en swap et le service
+    # ralentit au lieu d'être arrêté (mesuré : MemorySwap = 2x la limite par défaut)
+    memswap_limit: ${BACK_MEMORY}
     # 10 s : largement au-dessus du temps d'arrêt mesuré (< 1 s) avant le SIGKILL
     stop_grace_period: 10s
     # Relance après un crash, mais respecte un arrêt volontaire
@@ -66,6 +69,7 @@ services:
           memory: ${GATEWAY_MEMORY}
         reservations:
           memory: ${GATEWAY_MEMORY_RESERVATION}
+    memswap_limit: ${GATEWAY_MEMORY}   # pas de swap, comme le back
     stop_grace_period: 10s
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
@@ -100,6 +104,7 @@ services:
           memory: ${FRONT_MEMORY}
         reservations:
           memory: ${FRONT_MEMORY_RESERVATION}
+    memswap_limit: ${FRONT_MEMORY}     # pas de swap, comme le back
     stop_grace_period: 10s
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
@@ -107,8 +112,32 @@ services:
       - public
       - interne-front
 
+  # Outil de charge pour mesurer les ressources : hors de la stack normale
+  bench:
+    build:
+      context: ./Bench
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+    image: docker-cloud/bench
+    # Profil "bench" : ignoré par un docker compose up classique, lancé seulement à la demande
+    profiles: ["bench"]
+    # Mesurer une stack incomplète fausserait les résultats : on attend que le front soit prêt
+    depends_on:
+      front:
+        condition: service_healthy
+    # Limites aussi pour l'outil de test : il ne doit pas voler le CPU des services qu'il mesure
+    deploy:
+      resources:
+        limits:
+          cpus: "${BENCH_CPUS}"
+          memory: ${BENCH_MEMORY}
+    memswap_limit: ${BENCH_MEMORY}     # pas de swap, comme les autres services
+    # Réseau public seulement : il attaque le front comme un vrai client, sans raccourci vers la gateway ou le back
+    networks:
+      - public
+
 networks:
-  # Seul le front y est branché : c'est le seul service qui doit être exposé
+  # Front (et l'outil de bench) : c'est la seule zone qui doit être joignable de l'extérieur
   public:
   # Deux réseaux internes plutôt qu'un : avec un seul, le front pouvait joindre back:3000 en direct
   # et contourner la gateway. Chaque service ne voit plus que ses voisins directs.

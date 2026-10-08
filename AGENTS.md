@@ -27,6 +27,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | alpine + nodejs + tini | API : `GET /api/phrase`, `GET /health`. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
+| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
@@ -38,6 +39,8 @@ docker compose ps                     # état / santé / ports
 docker compose logs -f <service>
 docker compose down                   # arrêt propre ; -v supprime aussi les volumes
 docker compose run --rm gateway nginx -t -c /tmp/nginx.conf   # tester la config nginx générée
+powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1    # benchmark (stack démarrée)
+docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/phrase   # un scénario ab
 ```
 
 Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut être intercepté par `wslrelay` (WSL) : utiliser `127.0.0.1`.
@@ -68,6 +71,12 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - `HEALTHCHECK` sur chaque image (`127.0.0.1` pour nginx, qui n'écoute qu'en IPv4). Le compose utilise `depends_on: condition: service_healthy`.
 - `.dockerignore` et `LABEL org.opencontainers.image.*` sur chaque image.
 - `EXPOSE` documente, seul `ports:` publie. Seul le front publie un port.
+
+### Ressources
+- Chaque service a `deploy.resources.limits` (cpus, memory), `reservations.memory` et **`memswap_limit` égal à la limite mémoire** : sans ça, Docker double la limite en swap (mesuré) et le service ralentit au lieu d'être arrêté.
+- Les valeurs du `.env` sont **justifiées par le benchmark** (`Bench/run-bench.ps1`, section Benchmark du README) : CPU proportionnel au coût par requête de chaque service, mémoire selon le pic mesuré. nginx consomme bien moins que Node (environ 4 Mo contre 20 à 25 Mo) : ne pas lui donner autant.
+- Tas Node (`*_NODE_MAX_MEMORY`) à la moitié de la limite mémoire du conteneur. Réservation minimale imposée par Docker : 6 Mo.
+- Toute modification des services ou des limites : relancer le benchmark et mettre à jour les tableaux du README.
 
 ### ARG / ENV / .env
 - **ARG** = build uniquement (`ALPINE_VERSION`, `PORT` → `EXPOSE` + défaut de `ENV PORT`).

@@ -14,12 +14,23 @@ const FILES = {
   '/app.js': ['app.js', 'application/javascript; charset=utf-8'],
 };
 
+// En-têtes « hop-by-hop » (RFC 7230) : ils décrivent une connexion, pas le message, et ne doivent
+// pas être recopiés d'un saut à l'autre. Les recopier (chunked, keep-alive) bloquait les clients HTTP/1.0.
+const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade'];
+
+function withoutHopByHop(headers) {
+  const copy = { ...headers };
+  for (const name of HOP_BY_HOP) delete copy[name];
+  return copy;
+}
+
 // Relaie les appels /api/* vers la gateway (nom du service Docker, joignable seulement en interne)
 function relayToGateway(req, res) {
   const gatewayReq = http.request(
-    { host: GATEWAY_HOST, port: GATEWAY_PORT, path: req.url, method: req.method, headers: req.headers },
+    { host: GATEWAY_HOST, port: GATEWAY_PORT, path: req.url, method: req.method, headers: withoutHopByHop(req.headers) },
     (gatewayRes) => {
-      res.writeHead(gatewayRes.statusCode, gatewayRes.headers);
+      // Node choisit lui-même le découpage adapté au client (chunked en HTTP/1.1, fermeture en HTTP/1.0)
+      res.writeHead(gatewayRes.statusCode, withoutHopByHop(gatewayRes.headers));
       gatewayRes.pipe(res);
       // La gateway peut répondre avant la fin de l'envoi (ex. 413 fichier trop gros) :
       // on lit le reste du corps sans le transmettre, sinon le client reste bloqué
