@@ -1,0 +1,107 @@
+# AGENTS.md
+
+Instructions pour les agents IA (Claude Code ou autres) qui travaillent sur ce dépôt.
+
+## Projet
+
+TP noté du cours **M2 Dev Docker** : « Docker Cloud ». Sujet choisi : **mini cloud de stockage de fichiers** (envoyer, lister, télécharger, supprimer).
+
+C'est un **cours Docker, pas un cours web**. Le code applicatif reste minimal (Hello World aujourd'hui, Angular + Express simples plus tard). La note porte sur les images, l'orchestration et leur documentation.
+
+- Dépôt : https://github.com/AbadieThomasPro/M2_TP_Docker. Le prof regarde le **dernier commit avant la date butoir**.
+- Langue : **français** pour la documentation, les commentaires et les messages de commit.
+
+## Architecture
+
+```
+Navigateur ──:8080──▶ front ──http://gateway/api──▶ gateway (nginx) ──▶ back:3000
+                (seul port publié)        réseau "interne" (internal: true)
+```
+
+| Dossier | Image | Rôle |
+|---|---|---|
+| `Frontend/` | alpine + nodejs + tini | Sert la page (`src/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
+| `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
+| `Backend/` | alpine + nodejs + tini | API : `GET /api/phrase`, `GET /health`. |
+| `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne`, ressources, healthchecks, ordre back → gateway → front. |
+| `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
+
+## Commandes
+
+```bash
+docker compose up -d --build --wait   # build + démarrage, attend que tout soit healthy
+docker compose ps                     # état / santé / ports
+docker compose logs -f <service>
+docker compose down                   # arrêt propre ; -v supprime aussi les volumes
+docker compose run --rm gateway nginx -t -c /tmp/nginx.conf   # tester la config nginx générée
+```
+
+Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut être intercepté par `wslrelay` (WSL) : utiliser `127.0.0.1`.
+
+## Contraintes du sujet (non négociables)
+
+- **Aucune image toute faite de Docker Hub** : toutes les images partent de `alpine:${ALPINE_VERSION}` et installent elles-mêmes leurs outils (pas d'image `node`, `nginx`, `registry`...).
+- Au moins 3 types d'images : front, back, « serveur web » (la gateway nginx).
+- Chaque conteneur reçoit des **arguments au run** pour régler ses ressources.
+
+**Barème** (une ligne de README doit couvrir chaque point) : mise en forme, dépendances installées, manipulations sur l'OS, arguments attendus, entrypoints, arguments traduits dans le compose, limites de ressources expliquées, gestion de SIGTERM, dépendances entre conteneurs, schéma des communications.
+
+## Règles de travail
+
+### Commentaires
+- Dans les Dockerfile, le compose, le `.env`, la config nginx et les scripts : **les commentaires justifient** le choix (pourquoi, alternative écartée, contrainte). Ils ne **définissent pas** l'instruction.
+  - ❌ `# Dossier de l'application`
+  - ✅ `# Chemin fixe pour que les COPY et la CMD ne dépendent pas du répertoire courant`
+- Commentaires courts, en français.
+
+### Bonnes pratiques Docker (cours 1)
+- Base `alpine` avec une **version fixée** (ARG `ALPINE_VERSION`), jamais `latest`.
+- `apk add --no-cache`, chaque paquet justifié. Pas de `npm` dans une image finale (multi-stage si un build est nécessaire).
+- **Utilisateur non-root** (`USER`), fichiers du code laissés à root (lecture seule).
+- Ordre des couches : OS, paquets, utilisateur, ARG/ENV en haut ; `COPY` du code **en dernier**.
+- `CMD` / `ENTRYPOINT` en **forme exec**. Images Node : `ENTRYPOINT ["/sbin/tini", "--"]` + `CMD ["node", ...]`, mémoire via `NODE_OPTIONS`. Scripts d'init : terminer par `exec "$@"`.
+- Arrêt propre : l'application gère SIGTERM (nginx : `STOPSIGNAL SIGQUIT`). Objectif : `docker stop` en moins d'1 s.
+- `HEALTHCHECK` sur chaque image (`127.0.0.1` pour nginx, qui n'écoute qu'en IPv4). Le compose utilise `depends_on: condition: service_healthy`.
+- `.dockerignore` et `LABEL org.opencontainers.image.*` sur chaque image.
+- `EXPOSE` documente, seul `ports:` publie. Seul le front publie un port.
+
+### ARG / ENV / .env
+- **ARG** = build uniquement (`ALPINE_VERSION`, `PORT` → `EXPOSE` + défaut de `ENV PORT`).
+- **ENV** = valeurs par défaut dans l'image : l'image doit fonctionner seule, sans compose.
+- **`.env`** = valeurs du déploiement, injectées par le compose (`build.args` pour les ARG, `environment:` pour les ENV, `deploy.resources` / `ports`). Aucune valeur en dur dans le compose, sauf les noms de service (`back`, `gateway`).
+- Toute nouvelle variable : défaut en ENV + entrée commentée dans `.env` + passage dans le compose + ligne dans le README.
+
+### Documentation
+- Chaque changement d'image ou du compose met à jour le **README.md** (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources).
+- Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans le README quand ils justifient un choix.
+
+### Git
+- **L'agent ne commite pas et ne pousse pas.** À la fin de chaque lot, il propose un message de commit (style conventionnel, corps en français) ; l'utilisateur commite lui-même. Les commandes git en lecture (status, diff, log) sont autorisées.
+- `main` = version **Hello World** toujours fonctionnelle (`docker compose up --build`), testable par le prof.
+- L'application (plan 02) se développe sur la branche **`feature/app-cloud-stockage`**, à fusionner dans `main` avant la date de rendu (tag `hello-world` posé avant).
+
+### Tests avant de rendre un lot
+- `docker compose up -d --build --wait` : les 3 services sont `healthy`.
+- `curl.exe -s -m 10 http://127.0.0.1:8080/api/phrase` répond (toujours un délai max `-m` : une requête bloquée ne doit pas bloquer le test).
+- Arrêt de chaque service en moins d'1 s.
+- **Code de sortie à l'arrêt = `0`** pour chaque conteneur (`docker compose stop`, puis `docker inspect -f '{{.State.ExitCode}}' <conteneur>`) :
+  - `0` ✅ : le signal a été reçu et traité, arrêt propre ;
+  - `1` ❌ : l'application s'est arrêtée sur une erreur ;
+  - `137` ❌ (128 + 9 = SIGKILL) : le signal d'arrêt a été ignoré, Docker a tué le conteneur au bout des 10 s.
+- Nettoyage : `docker compose down` + suppression des images de test.
+
+## Fichiers hors dépôt
+
+| Emplacement | Contenu |
+|---|---|
+| `../features/01-seance-2-docker.md` | Plan Docker de la séance 2, découpé en lots (sur `main`) |
+| `../features/02-app-cloud-stockage.md` | Plan de l'application, découpé en lots (sur la branche dédiée) |
+| `../features/Compte rendu/` | Comptes rendus de séance (`compte-rendu-seance-N.md`) |
+| `../../Cours-1-Docker.html`, `../../Note_Docker.txt` | Cours de référence pour vérifier les bonnes pratiques |
+| `../Activité 2 séances.pdf`, `TP - Docker Cloud (1).pdf` | Consignes de la séance et sujet du TP |
+
+## Pièges connus (poste Windows)
+- PowerShell 5.1 lit les scripts `.ps1` en ANSI : éviter les remplacements de texte accentué par script. Pour modifier des fichiers, utiliser l'outil d'édition, ou Node.
+- En PowerShell, `@(@("a","b"))` est aplati en `@("a","b")` : attention aux tableaux de paires.
+- `sed` et `git` ne sont pas disponibles dans le Bash de l'agent : utiliser PowerShell pour git.
+- Les `.sh` doivent rester en fins de ligne LF (`.gitattributes`), sinon ils ne s'exécutent pas dans le conteneur.

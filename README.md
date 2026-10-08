@@ -137,6 +137,7 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 ├── docker-compose.yml       # orchestration des 3 conteneurs
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
+├── AGENTS.md                # règles du projet pour les agents IA (CLAUDE.md l'importe)
 └── README.md
 ```
 
@@ -559,6 +560,13 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 - `docker compose down` envoie le signal d'arrêt à chaque conteneur : SIGTERM pour front et back, SIGQUIT pour la gateway (`STOPSIGNAL`).
 - `stop_grace_period: 10s` : délai laissé à chaque conteneur pour s'arrêter proprement avant le kill forcé (SIGKILL).
 - Tous les services s'arrêtent proprement bien avant ce délai : l'arrêt complet mesuré prend moins de 2 secondes.
+- **Code de sortie vérifié** (`docker inspect -f '{{.State.ExitCode}}'`) : `0` signifie que le signal a été traité et l'arrêt propre, `1` une erreur de l'application, `137` (128 + 9) un SIGKILL après les 10 s, donc un signal ignoré.
+
+| Service | Temps d'arrêt mesuré | Code de sortie |
+|---|---|---|
+| `front` | 0,73 s | `0` ✅ |
+| `gateway` | 0,53 s | `0` ✅ |
+| `back` | 0,47 s | `0` ✅ |
 
 `restart: unless-stopped` relance automatiquement un conteneur qui plante, sauf s'il a été arrêté volontairement.
 
