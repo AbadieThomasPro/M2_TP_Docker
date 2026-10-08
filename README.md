@@ -375,21 +375,43 @@ Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui
 | `MAX_UPLOAD_MB` aussi dans le back | Même limite que la gateway : une double sécurité si le back est appelé sans elle. Un envoi refusé ne laisse aucun fichier partiel (testé). |
 | Erreurs : `413` pour un fichier trop gros, sinon `500` générique | Le détail technique reste dans les logs et n'est pas exposé au client. |
 
-### Image de base
+### Image de base : build multi-stage
 
-Même choix que le Frontend : `alpine:3.20`, OS minimal en version fixée, avec Node installé par nos soins.
+Même base que le Frontend (`alpine:3.20`, version fixée, Node installé par nos soins), mais en **deux stages** :
+
+```
+Stage "deps"  : alpine + nodejs + npm ──▶ npm ci --omit=dev ──▶ node_modules
+                                                                     │ COPY --from=deps
+Stage final   : alpine + nodejs + tini + tzdata ◀───────────────────┘   (npm n'y entre jamais)
+```
+
+| Choix | Justification |
+|---|---|
+| Multi-stage | npm ne sert qu'à **installer** les dépendances, pas à faire tourner l'API. Le stage `deps` est jeté à la fin : npm, son cache et ses outils n'arrivent pas dans l'image livrée. L'image est plus petite et un attaquant dispose de moins d'outils (vérifié : `npm absent` dans l'image finale). |
+| `COPY package.json package-lock.json` **avant** le code | La couche `npm ci` reste en cache tant que les dépendances ne changent pas. Vérifié : après une modification de `server.js`, le rebuild affiche `npm ci ... CACHED`, donc rien n'est réinstallé. |
+| `npm ci` plutôt que `npm install` | Installe **exactement** les versions du `package-lock.json` : le build est reproductible. C'est la règle du cours. |
+| `--omit=dev` | Aucune dépendance de développement en production. |
+
+**Tailles mesurées :**
+
+| Image | Taille | Commentaire |
+|---|---|---|
+| Version Hello World (`main`, Node natif, aucune dépendance) | 91,8 Mo | Référence : l'essentiel du poids vient de `nodejs` |
+| Stage `deps` (avec npm) | 116 Mo | Ce que serait l'image sans multi-stage |
+| **Image finale multi-stage** | **97,9 Mo** | 18 Mo de moins que sans multi-stage ; Express + multer n'ajoutent qu'environ 6 Mo |
 
 ### Dépendances installées
 
-Installées via `apk add --no-cache`, comme pour le Frontend.
+| Où | Dépendance | Rôle | Pourquoi ce choix |
+|---|---|---|---|
+| Stage `deps` (`apk`) | `nodejs`, `npm` | Installer les paquets npm | npm reste dans ce stage jetable. |
+| Image finale (`apk`) | `nodejs` | Exécute `src/server.js` | Runtime seul, sans npm : les dépendances arrivent déjà installées. |
+| Image finale (`apk`) | `tini` | Init minimal en PID 1 | Relaie SIGTERM à Node et nettoie les processus zombies, pour un arrêt propre. |
+| Image finale (`apk`) | `tzdata` | Fuseaux horaires | Heure de Paris dans les logs de l'API. |
+| npm (`package.json`) | `express` | Routage HTTP | Routes de l'API en quelques lignes. |
+| npm (`package.json`) | `multer` | Décodage des envois multipart | Écrit les fichiers en flux sur le disque, sans les garder en mémoire. |
 
-| Dépendance | Rôle | Pourquoi ce choix |
-|---|---|---|
-| `nodejs` | Exécute `src/server.js`, l'API HTTP | Seul le runtime est installé, sans `npm` : l'API n'utilise que le module natif `http` (pas d'Express), donc aucune librairie externe n'est nécessaire. |
-| `tini` | Init minimal lancé en PID 1 | Relaie SIGTERM à Node et nettoie les processus zombies, pour un arrêt propre lors d'un `docker stop`. |
-| `tzdata` | Base des fuseaux horaires | Heure de Paris dans les logs de l'API. |
-
-`wget` (healthcheck) est fourni par BusyBox : rien à installer.
+`apk add --no-cache` dans les deux stages : l'index des paquets n'est pas conservé. `wget` (healthcheck) est fourni par BusyBox : rien à installer.
 
 ### Manipulations sur l'OS
 
@@ -400,7 +422,8 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 | `RUN mkdir -p /data/files && chown -R back:back /data` | Crée le dossier de stockage et le donne à `back` **avant** l'instruction `VOLUME`. Quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. Sans ce `chown`, le volume appartiendrait à root et l'API, non-root, ne pourrait pas écrire. Vérifié : `/data` et `/data/files` appartiennent à `back`. |
 | `VOLUME /data` | Déclare `/data` comme dossier de données hors de la couche du conteneur. Même avec un simple `docker run`, sans compose, Docker crée un volume anonyme au lieu d'écrire dans le conteneur. Toute instruction placée après `VOLUME` qui modifierait `/data` serait ignorée : d'où le `chown` juste avant. |
 | `WORKDIR /app` | Dossier de travail de l'application. |
-| `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Tout le code est dans `src/`, car l'API ne sert aucun fichier statique à séparer du code serveur. |
+| `COPY --from=deps /app/node_modules ./node_modules` | Récupère seulement les dépendances déjà installées par le stage `deps`, pas npm. |
+| `COPY src/ ./src/` | Copie du code de l'API, qui appartient à root : `back` peut le lire mais pas le modifier. Copié en dernier, car c'est ce qui change le plus souvent. |
 | `USER back` | Bascule sur l'utilisateur non-root pour l'exécution. |
 
 ### Ports exposés
@@ -424,6 +447,7 @@ Installées via `apk add --no-cache`, comme pour le Frontend.
 | `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
 | `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
 | `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
+| `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un envoi, la même que pour la gateway. Double sécurité : le back refuse aussi (`413`) si on l'appelle sans passer par la gateway. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -592,7 +616,7 @@ Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .en
 
 | Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
 |---|---|---|---|
-| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
 | `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `MAX_UPLOAD_MB`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT`, `MAX_UPLOAD_MB` |
 | `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 

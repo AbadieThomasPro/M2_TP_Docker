@@ -19,6 +19,7 @@ services:
       NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
       PHRASE: ${BACK_PHRASE}
       STORAGE_DIR: ${STORAGE_DIR}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}   # même valeur que la gateway : double sécurité
       TZ: ${TZ}
     # Volume nommé plutôt que bind mount : géré par Docker, portable (pas de chemin propre à la machine)
     # et réutilisé à chaque up, alors que le VOLUME seul créerait un volume anonyme différent à chaque fois

@@ -25,7 +25,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 |---|---|---|
 | `Frontend/` | alpine + nodejs + tini | Sert la page (`src/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
-| `Backend/` | alpine + nodejs + tini | API : `GET /api/phrase`, `GET /health`. |
+| `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files`, `GET/DELETE /api/files/:name`, `GET /health` (et `/api/phrase` tant que le front Hello World l'utilise). Fichiers dans `STORAGE_DIR` (volume). |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge, profil compose `bench` (ne démarre pas avec `up`). `run-bench.ps1` mesure les pics CPU / mémoire. |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
