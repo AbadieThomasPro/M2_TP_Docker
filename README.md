@@ -88,11 +88,11 @@ flowchart TB
     end
   end
 
-  nav -- "HTTP :8080<br/>seul port publié (8080→80)" --> front
-  front -- "réseau interne-front<br/>/api/* → http://gateway:80" --> gateway
-  gateway -- "réseau interne-back<br/>/api/* → http://back:3000" --> back
-  back -- "écriture<br/>(groupe stockage)" --> vol
-  cleaner -- "supprime les expirés<br/>(groupe stockage)" --> vol
+  nav <-- "HTTP :8080<br/>seul port publié (8080→80)" --> front
+  front <-- "réseau interne-front<br/>/api/* → http://gateway:80" --> gateway
+  gateway <-- "réseau interne-back<br/>/api/* → http://back:3000" --> back
+  back <-- "lecture + écriture<br/>(groupe stockage)" --> vol
+  cleaner <-- "lecture des noms + suppression<br/>(groupe stockage)" --> vol
   front -. "⛔ bloqué : aucun réseau commun" .- back
 
   classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
@@ -104,6 +104,8 @@ flowchart TB
   class vol data
   class cleaner iso
 ```
+
+**Lecture des flèches :** une flèche à double sens représente un **échange** : une requête dans un sens, la réponse dans l'autre (ou, pour le volume, des lectures et des écritures). Le libellé indique **qui ouvre la connexion** (« `/api/*` → `http://gateway:80` » : c'est le front qui appelle la gateway). La gateway ne fait que répondre au front, elle ne l'appelle jamais, et le back ne contacte personne. Le lien en pointillés front ⋯ back est **bloqué** : ces deux services n'ont aucun réseau en commun. Le détail de chaque aller-retour est dans le [schéma des communications](#schéma-des-communications--chemin-dune-requête).
 
 | Élément | À retenir |
 |---|---|
