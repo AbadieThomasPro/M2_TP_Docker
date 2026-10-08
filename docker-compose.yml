@@ -10,6 +10,7 @@ services:
       args:
         ALPINE_VERSION: ${ALPINE_VERSION}
         PORT: ${BACK_PORT}
+        STORAGE_GID: ${STORAGE_GID}   # même valeur que le cleaner : droits partagés sur le volume
     # Nom d'image fixe : réutilisable tel quel par Swarm, qui ignore build:
     image: docker-cloud/back
     # Surcharge des ENV au run : changer un réglage ne demande pas de rebuild
@@ -17,8 +18,11 @@ services:
       PORT: ${BACK_PORT}
       # Tas Node sous la limite mémoire : Node libère avant d'être tué (OOM)
       NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
-      PHRASE: ${BACK_PHRASE}
       STORAGE_DIR: ${STORAGE_DIR}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}   # même valeur que la gateway : double sécurité
+      TTL_DEFAULT_H: ${TTL_DEFAULT_H}
+      TTL_MAX_H: ${TTL_MAX_H}
+      STORAGE_QUOTA_MB: ${STORAGE_QUOTA_MB}
       TZ: ${TZ}
     # Volume nommé plutôt que bind mount : géré par Docker, portable (pas de chemin propre à la machine)
     # et réutilisé à chaque up, alors que le VOLUME seul créerait un volume anonyme différent à chaque fois
@@ -35,6 +39,9 @@ services:
     # Swap égal à la limite = pas de swap : sinon Docker double la limite en swap et le service
     # ralentit au lieu d'être arrêté (mesuré : MemorySwap = 2x la limite par défaut)
     memswap_limit: ${BACK_MEMORY}
+    # Système de fichiers de l'image en lecture seule : en cas de faille, impossible de modifier le code
+    # ou de déposer un binaire. Le back n'écrit que dans le volume (envois compris, via .incoming/)
+    read_only: true
     # 10 s : largement au-dessus du temps d'arrêt mesuré (< 1 s) avant le SIGKILL
     stop_grace_period: 10s
     # Relance après un crash, mais respecte un arrêt volontaire
@@ -42,6 +49,45 @@ services:
     # Uniquement le réseau de la gateway : le back n'est joignable ni de l'extérieur ni par le front
     networks:
       - interne-back
+
+  # Worker qui supprime les fichiers expirés et les envois abandonnés
+  cleaner:
+    build:
+      context: ./Cleaner
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        STORAGE_GID: ${STORAGE_GID}   # même valeur que le back : sinon il ne pourrait rien supprimer
+    image: docker-cloud/cleaner
+    environment:
+      STORAGE_DIR: ${STORAGE_DIR}
+      CLEANUP_INTERVAL_S: ${CLEANUP_INTERVAL_S}
+      INCOMING_MAX_AGE_MIN: ${INCOMING_MAX_AGE_MIN}
+    # Même volume que le back : il lit l'expiration dans les noms et supprime, sans jamais parler à l'API
+    volumes:
+      - stockage:/data
+    # Aucun réseau : il ne parle à personne, on lui retire donc toute interface (moindre privilège)
+    network_mode: none
+    # Le premier conteneur qui monte un volume neuf y recopie les droits de son image :
+    # le back (qui crée /data/files en 2775 groupe stockage) doit passer avant le cleaner
+    depends_on:
+      back:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${CLEANER_CPUS}"
+          memory: ${CLEANER_MEMORY}
+        reservations:
+          memory: ${CLEANER_MEMORY_RESERVATION}
+    memswap_limit: ${CLEANER_MEMORY}   # pas de swap, comme les autres services
+    # Système de fichiers en lecture seule : le worker n'écrit que dans le volume et dans /tmp (heartbeat)
+    read_only: true
+    # /tmp en RAM et minuscule : il ne contient que le heartbeat, et compte dans la mémoire du conteneur
+    tmpfs:
+      - /tmp:size=1m
+    # 10 s : le worker s'arrête après le fichier en cours (mesuré, voir README)
+    stop_grace_period: 10s
+    restart: unless-stopped
 
   gateway:
     build:
@@ -58,7 +104,7 @@ services:
       BACK_PORT: ${BACK_PORT}         # même variable que le back : les deux restent cohérents
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
       TZ: ${TZ}
-    # nginx refuse de démarrer s'il ne peut pas résoudre "back" : on attend qu'il soit prêt
+    # Sans back prêt, la gateway répondrait 502 à chaque appel d'API : on attend qu'il soit healthy
     depends_on:
       back:
         condition: service_healthy
@@ -70,6 +116,11 @@ services:
         reservations:
           memory: ${GATEWAY_MEMORY_RESERVATION}
     memswap_limit: ${GATEWAY_MEMORY}   # pas de swap, comme le back
+    # Lecture seule, comme le back. nginx doit pourtant écrire : config générée, PID, fichiers temporaires
+    read_only: true
+    # ... d'où un /tmp en RAM, limité car il compte dans la limite mémoire du conteneur
+    tmpfs:
+      - /tmp:size=${GATEWAY_TMPFS_SIZE}
     stop_grace_period: 10s
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
@@ -105,6 +156,8 @@ services:
         reservations:
           memory: ${FRONT_MEMORY_RESERVATION}
     memswap_limit: ${FRONT_MEMORY}     # pas de swap, comme le back
+    # Lecture seule : le front ne fait que lire ses fichiers et relayer, il n'écrit nulle part
+    read_only: true
     stop_grace_period: 10s
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
@@ -112,32 +165,36 @@ services:
       - public
       - interne-front
 
-  # Outil de charge pour mesurer les ressources : hors de la stack normale
-  bench:
-    build:
-      context: ./Bench
-      args:
-        ALPINE_VERSION: ${ALPINE_VERSION}
-    image: docker-cloud/bench
-    # Profil "bench" : ignoré par un docker compose up classique, lancé seulement à la demande
-    profiles: ["bench"]
-    # Mesurer une stack incomplète fausserait les résultats : on attend que le front soit prêt
-    depends_on:
-      front:
-        condition: service_healthy
-    # Limites aussi pour l'outil de test : il ne doit pas voler le CPU des services qu'il mesure
-    deploy:
-      resources:
-        limits:
-          cpus: "${BENCH_CPUS}"
-          memory: ${BENCH_MEMORY}
-    memswap_limit: ${BENCH_MEMORY}     # pas de swap, comme les autres services
-    # Réseau public seulement : il attaque le front comme un vrai client, sans raccourci vers la gateway ou le back
-    networks:
-      - public
+  # Outil de charge utilisé pour dimensionner les ressources (voir README, partie Benchmark).
+  # Gardé pour mémoire mais désactivé : le dossier Bench/ est un outil local, non versionné (.gitignore).
+  # Pour le réactiver : retirer les "#" de ce bloc, avec le dossier Bench/ présent en local.
+  #
+  # bench:
+  #   build:
+  #     context: ./Bench
+  #     args:
+  #       ALPINE_VERSION: ${ALPINE_VERSION}
+  #   image: docker-cloud/bench
+  #   # Profil "bench" : ignoré par un docker compose up classique, lancé seulement à la demande
+  #   profiles: ["bench"]
+  #   # Mesurer une stack incomplète fausserait les résultats : on attend que le front soit prêt
+  #   depends_on:
+  #     front:
+  #       condition: service_healthy
+  #   # Limites aussi pour l'outil de test : il ne doit pas voler le CPU des services qu'il mesure
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "${BENCH_CPUS}"
+  #         memory: ${BENCH_MEMORY}
+  #   memswap_limit: ${BENCH_MEMORY}     # pas de swap, comme les autres services
+  #   read_only: true                    # ab n'écrit rien : même règle que les autres services
+  #   # Réseau public seulement : il attaque le front comme un vrai client, sans raccourci vers la gateway ou le back
+  #   networks:
+  #     - public
 
 networks:
-  # Front (et l'outil de bench) : c'est la seule zone qui doit être joignable de l'extérieur
+  # Front seulement : c'est la seule zone qui doit être joignable de l'extérieur
   public:
   # Deux réseaux internes plutôt qu'un : avec un seul, le front pouvait joindre back:3000 en direct
   # et contourner la gateway. Chaque service ne voit plus que ses voisins directs.
@@ -148,5 +205,5 @@ networks:
     internal: true
 
 volumes:
-  # Fichiers du cloud : seul le back y accède, ils survivent à down et aux rebuilds (supprimés par down -v)
+  # Fichiers du cloud : le back écrit, le cleaner supprime ; ils survivent à down et aux rebuilds (supprimés par down -v)
   stockage:

@@ -1,0 +1,9 @@
+# Dépendances npm : installées dans les images (npm ci), jamais versionnées (lourdes et propres à l'OS)
+node_modules/
+# Artefacts de build Angular : régénérés par le stage de build de l'image front
+dist/
+.angular/
+# Logs locaux
+*.log
+# Outil de benchmark : utilisé localement pour dimensionner les ressources, pas livré dans le rendu
+Bench/

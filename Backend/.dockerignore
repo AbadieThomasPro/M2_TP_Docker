@@ -1,9 +1,10 @@
-# Contexte de build réduit au strict nécessaire : build plus rapide et rien d'inutile dans l'image
+# Contexte de build réduit au strict nécessaire : build plus rapide et rien d'inutile dans l'image.
+# "**/" : un motif simple ne vise que la racine du contexte, pas les sous-dossiers
 
-# Dépendances locales (Windows) : elles seront installées pour Linux dans l'image
-node_modules
+# Dépendances locales (Windows) : réinstallées pour Linux par npm ci dans l'image
+**/node_modules
 # Bruit qui n'a rien à faire dans une image
-*.log
+**/*.log
 .git
 # Fichiers de build eux-mêmes : inutiles une fois l'image construite
 Dockerfile

@@ -1,0 +1,183 @@
+# Déploiement Swarm de la stack (scalabilité). Le docker-compose.yml reste le fichier principal.
+#
+#   ./swarm-deploy.ps1   (Windows)   ou   ./swarm-deploy.sh   (Linux / macOS)
+#
+# Fichier autonome et non surcharge du compose : "docker stack deploy" utilise l'ancien format compose v3,
+# qui refuse la forme longue de depends_on (condition: service_healthy) et interdit memswap_limit (testé).
+# Seule la STRUCTURE est répétée : toutes les VALEURS viennent du même .env, chargé par le script
+# (docker stack deploy ne lit pas le .env lui-même).
+# Les images sont construites par "docker compose build" : Swarm ignore build et utilise des images existantes.
+
+services:
+  back:
+    image: docker-cloud/back
+    environment:
+      PORT: ${BACK_PORT}
+      NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
+      STORAGE_DIR: ${STORAGE_DIR}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
+      TTL_DEFAULT_H: ${TTL_DEFAULT_H}
+      TTL_MAX_H: ${TTL_MAX_H}
+      STORAGE_QUOTA_MB: ${STORAGE_QUOTA_MB}
+      TZ: ${TZ}
+    volumes:
+      - stockage:/data
+    read_only: true
+    stop_grace_period: 10s
+    networks:
+      - interne-back
+    deploy:
+      # 3 instances : le back est le goulot mesuré (~2,8 ms de CPU par liste) et il est sans état
+      # (expiration dans le nom des fichiers, volume partagé) : n'importe quelle instance répond à tout.
+      # Swarm répartit les requêtes entre elles (adresse virtuelle du service "back")
+      replicas: 3
+      # Plafond d'instances par machine : une commande "scale" excessive (ou un outil d'auto-scaling
+      # externe, Swarm n'en a pas) ne peut pas multiplier le back au-delà ; le surplus reste en attente
+      placement:
+        max_replicas_per_node: ${BACK_MAX_REPLICAS_PER_NODE}
+      # Limites PAR INSTANCE, comme dans le compose : elles protègent d'une instance qui s'emballe,
+      # pas d'une multiplication des instances (5 x 0,65 CPU = 3,25 CPU)
+      resources:
+        limits:
+          cpus: "${BACK_CPUS}"
+          memory: ${BACK_MEMORY}
+        # Réservations : le planificateur de Swarm ne place une instance que si la machine a encore
+        # ces ressources disponibles ; sinon elle reste "Pending" au lieu d'étouffer les autres services
+        reservations:
+          cpus: "${BACK_CPUS_RESERVATION}"
+          memory: ${BACK_MEMORY_RESERVATION}
+      # Remplace "restart: unless-stopped", ignoré par Swarm : une tâche qui échoue est recréée
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+      # Mise à jour progressive : une tâche à la fois, la nouvelle doit être healthy avant l'arrêt
+      # de l'ancienne (start-first), donc aucune coupure ; retour arrière automatique en cas d'échec
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: start-first
+        failure_action: rollback
+
+  cleaner:
+    image: docker-cloud/cleaner
+    environment:
+      STORAGE_DIR: ${STORAGE_DIR}
+      CLEANUP_INTERVAL_S: ${CLEANUP_INTERVAL_S}
+      INCOMING_MAX_AGE_MIN: ${INCOMING_MAX_AGE_MIN}
+    volumes:
+      - stockage:/data
+      # tmpfs en syntaxe longue : seule forme acceptée par Swarm (taille en octets : 1 Mo)
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 1048576
+    read_only: true
+    stop_grace_period: 10s
+    # network_mode: none n'existe pas en Swarm : le worker rejoint "isole", un réseau interne
+    # dont il est le seul membre. Même effet : il ne peut joindre personne, ni Internet
+    networks:
+      - isole
+    deploy:
+      # Toujours UN seul worker : plusieurs supprimeraient les mêmes fichiers en même temps
+      replicas: 1
+      resources:
+        limits:
+          cpus: "${CLEANER_CPUS}"
+          memory: ${CLEANER_MEMORY}
+        reservations:
+          cpus: "${CLEANER_CPUS_RESERVATION}"
+          memory: ${CLEANER_MEMORY_RESERVATION}
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+
+  gateway:
+    image: docker-cloud/gateway
+    environment:
+      PORT: ${GATEWAY_PORT}
+      WORKER_PROCESSES: ${GATEWAY_WORKER_PROCESSES}
+      WORKER_CONNECTIONS: ${GATEWAY_WORKER_CONNECTIONS}
+      BACK_HOST: back
+      BACK_PORT: ${BACK_PORT}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}
+      TZ: ${TZ}
+    volumes:
+      # Config générée, PID et fichiers temporaires de nginx (8 Mo, compté dans sa mémoire)
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 8388608
+    read_only: true
+    stop_grace_period: 10s
+    networks:
+      - interne-front
+      - interne-back
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          # Plus que dans le compose (0,10) : elle relaie le trafic de 3 back (rapport de coûts 7 / 3 / 1)
+          cpus: "${SWARM_GATEWAY_CPUS}"
+          memory: ${GATEWAY_MEMORY}
+        reservations:
+          cpus: "${GATEWAY_CPUS_RESERVATION}"
+          memory: ${GATEWAY_MEMORY_RESERVATION}
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+      update_config:
+        order: start-first
+        failure_action: rollback
+
+  front:
+    image: docker-cloud/front
+    environment:
+      PORT: ${FRONT_PORT}
+      NODE_OPTIONS: --max-old-space-size=${FRONT_NODE_MAX_MEMORY}
+      GATEWAY_HOST: gateway
+      GATEWAY_PORT: ${GATEWAY_PORT}
+      TZ: ${TZ}
+    # Publication par le "routing mesh" de Swarm : le port 8080 de l'hôte mène au service front
+    ports:
+      - "${FRONT_PUBLISHED_PORT}:${FRONT_PORT}"
+    read_only: true
+    stop_grace_period: 10s
+    networks:
+      - public
+      - interne-front
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          # Plus que dans le compose (0,25) : sinon le front devient le goulot dès 3 back (mesuré)
+          cpus: "${SWARM_FRONT_CPUS}"
+          memory: ${FRONT_MEMORY}
+        reservations:
+          cpus: "${FRONT_CPUS_RESERVATION}"
+          memory: ${FRONT_MEMORY_RESERVATION}
+      restart_policy:
+        condition: on-failure
+        delay: 2s
+      update_config:
+        order: start-first
+        failure_action: rollback
+
+# Mêmes réseaux que le compose, en "overlay" : le type de réseau de Swarm, qui peut s'étendre sur
+# plusieurs machines. Les réseaux internes restent sans accès extérieur
+networks:
+  public:
+    driver: overlay
+  interne-front:
+    driver: overlay
+    internal: true
+  interne-back:
+    driver: overlay
+    internal: true
+  # Remplace network_mode: none pour le cleaner
+  isole:
+    driver: overlay
+    internal: true
+
+volumes:
+  # Volume propre à la stack ("cloud_stockage"), distinct de celui du compose ("docker-cloud_stockage")
+  stockage:

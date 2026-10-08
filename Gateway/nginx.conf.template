@@ -25,6 +25,12 @@ http {
     # Taille max d'upload réglée au run : un fichier trop gros est refusé (413) sans charger le back
     client_max_body_size ${MAX_UPLOAD_MB}m;
 
+    # DNS interne de Docker, interrogé à chaque expiration (10 s) plutôt qu'une seule fois au démarrage :
+    # les instances du back ajoutées ou retirées par --scale sont vues sans redémarrer nginx.
+    # ipv6=off : les réseaux du compose sont en IPv4, inutile d'attendre des réponses AAAA.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    resolver_timeout 5s;
+
     server {
         listen ${PORT};
 
@@ -36,7 +42,22 @@ http {
 
         # Seul chemin autorisé vers le back ; en-têtes transmis pour que le back connaisse le vrai client
         location /api/ {
-            proxy_pass http://${BACK_HOST}:${BACK_PORT};
+            # Adresse dans une variable : c'est ce qui oblige nginx à passer par le resolver à chaque
+            # requête (une adresse écrite en dur n'est résolue qu'une fois, au démarrage)
+            set $back_upstream http://${BACK_HOST}:${BACK_PORT};
+            proxy_pass $back_upstream;
+
+            # Envoi transmis au back au fil de l'eau au lieu d'être d'abord écrit en entier dans /tmp :
+            # pas de copie disque en double, et /tmp peut rester un petit tmpfs en RAM
+            proxy_request_buffering off;
+            # Pas de tampon disque pour les réponses : sinon un téléchargement plus rapide côté back que
+            # côté client est stocké dans /tmp (tmpfs de 8 Mo en lecture seule) et coupé quand il est plein
+            # (constaté : 7 Mo reçus sur 40, "No space left on device"). nginx relaie alors au rythme du client
+            proxy_max_temp_file_size 0;
+            # HTTP/1.1 vers le back : nécessaire pour transmettre en flux un corps envoyé par morceaux (chunked)
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
