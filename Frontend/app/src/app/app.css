@@ -1,0 +1,44 @@
+/* Mise en page propre au composant ; couleurs, polices et composants viennent des variables de styles.css */
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--space-md);
+  display: grid;
+  gap: var(--space-xl);
+}
+
+.hero h1 {
+  font: var(--font-display);
+  color: var(--color-primary);
+  margin: 0 0 var(--space-sm);
+}
+
+.lead {
+  font: var(--font-body-lg);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.upload {
+  display: grid;
+  grid-template-columns: 1fr 180px auto;
+  gap: var(--space-md);
+  align-items: end;
+}
+
+.list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-md);
+}
+
+.empty {
+  margin: var(--space-md) 0 0;
+}
+
+@media (max-width: 640px) {
+  .upload {
+    grid-template-columns: 1fr;
+  }
+}

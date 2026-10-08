@@ -1,0 +1,58 @@
+<main class="page">
+  <header class="hero">
+    <h1>Parchemins éphémères</h1>
+    <p class="lead">Déposez un fichier, choisissez combien de temps il doit vivre : passé ce délai, le parchemin se consume.</p>
+  </header>
+
+  <section class="card card--accent" aria-labelledby="titre-depot">
+    <h2 id="titre-depot">Déposer un parchemin</h2>
+    <div class="upload">
+      <label class="field">
+        <span class="field__label">Fichier</span>
+        <input #fileInput class="input" type="file" (change)="pick($event)" />
+      </label>
+      <label class="field">
+        <span class="field__label">Durée de vie</span>
+        <select class="input" [value]="ttl()" (change)="chooseTtl($event)">
+          @for (option of ttlOptions; track option.hours) {
+            <option [value]="option.hours">{{ option.label }}</option>
+          }
+        </select>
+      </label>
+      <button class="btn btn--primary" type="button" [disabled]="!selected() || sending()" (click)="send(fileInput)">
+        {{ sending() ? 'Envoi…' : 'Envoyer' }}
+      </button>
+    </div>
+    @if (status(); as s) {
+      <p class="chip" [class.chip--success]="s.kind === 'success'" [class.chip--error]="s.kind === 'error'" role="status">
+        {{ s.text }}
+      </p>
+    }
+  </section>
+
+  <section class="card" aria-labelledby="titre-liste">
+    <div class="list-head">
+      <h2 id="titre-liste">Coffre</h2>
+      <span class="muted">{{ files().length }} parchemin(s) · {{ size(totalSize()) }}</span>
+    </div>
+
+    @if (files().length === 0) {
+      <p class="muted empty">Le coffre est vide.</p>
+    } @else {
+      <ul class="list">
+        @for (file of files(); track file.name) {
+          <li class="list__row">
+            <div class="list__main">
+              <a class="list__name" [href]="downloadUrl(file)" download>{{ file.originalName }}</a>
+              <span class="muted">{{ size(file.size) }}</span>
+            </div>
+            <span class="chip" [class.chip--soon]="isSoon(file)" [class.chip--ttl]="!isSoon(file)">
+              {{ isSoon(file) ? 'Se consume' : 'Expire' }} dans {{ remaining(file) }}
+            </span>
+            <button class="btn btn--destructive btn--sm" type="button" (click)="remove(file)">Détruire</button>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+</main>

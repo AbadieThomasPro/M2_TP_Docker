@@ -1,0 +1,258 @@
+/* Design system QuestUI (questui-DESIGN.md) : valeurs définies une seule fois, réutilisées partout */
+:root {
+  /* Couleurs */
+  --color-primary: #ca8a04;
+  --color-primary-hover: #b8780a;
+  --color-primary-border: #daa520;
+  --color-secondary: #991b1b;
+  --color-secondary-border: #b91c1c;
+  --color-secondary-hover: #7f1d1d;
+  --color-tertiary: #581c87;
+  --color-bg: #1a0f0a;
+  --color-surface: #2c1a10;
+  --color-surface-raised: #3d2517;
+  --color-border: #5c3d2e;
+  --color-text: #f5e6d3;
+  --color-text-muted: #bfa98a;
+  --color-success: #22c55e;
+  --color-error: #991b1b;
+  --color-error-text: #f87171;
+
+  /* Typographie */
+  --font-headline: 'Cinzel', serif;
+  --font-text: 'Spectral', serif;
+  --font-mono: 'Fira Code', monospace;
+  --font-display: 700 40px/1.15 var(--font-headline);
+  --font-h2: 600 24px/1.25 var(--font-headline);
+  --font-body-lg: 400 18px/1.7 var(--font-text);
+  --font-body: 400 16px/1.7 var(--font-text);
+  --font-body-sm: 400 14px/1.6 var(--font-text);
+  --font-chip: 400 11px/1.4 var(--font-headline);
+
+  /* Espacements (base 8px) */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Rayons : angles discrets, esprit médiéval */
+  --radius-sm: 2px;
+  --radius: 4px;
+
+  /* Ombres dorées */
+  --shadow-sm: 0 1px 3px rgba(202, 138, 4, 0.15);
+  --shadow: 0 2px 8px rgba(202, 138, 4, 0.2);
+  --shadow-glow: 0 0 20px rgba(202, 138, 4, 0.4);
+
+  /* Animations sobres */
+  --transition: 300ms ease;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: var(--font-body);
+}
+
+h2 {
+  font: var(--font-h2);
+  color: var(--color-text);
+  margin: 0 0 var(--space-md);
+}
+
+a {
+  color: var(--color-primary);
+}
+
+.muted {
+  color: var(--color-text-muted);
+  font: var(--font-body-sm);
+}
+
+/* Cartes */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-lg);
+}
+
+.card--accent {
+  border-top: 2px solid var(--color-primary);
+}
+
+/* Champs */
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field__label {
+  font: 500 14px/1.4 var(--font-text);
+  color: var(--color-text);
+}
+
+.input {
+  min-height: 40px;
+  padding: var(--space-sm) 12px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font: var(--font-body-sm);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.input:hover {
+  border-color: var(--color-primary);
+}
+
+.input:focus {
+  outline: none;
+  border: 2px solid var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(202, 138, 4, 0.25);
+}
+
+/* Bouton natif du champ fichier : blanc et sans-serif par défaut, contraire au design */
+.input::file-selector-button {
+  margin-right: 12px;
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius);
+  font: 600 13px/1 var(--font-headline);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.input::file-selector-button:hover {
+  background: rgba(202, 138, 4, 0.08);
+}
+
+/* Boutons */
+.btn {
+  min-height: 40px;
+  padding: var(--space-sm) 22px;
+  border-radius: var(--radius);
+  font: 600 14px/1 var(--font-headline);
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition);
+}
+
+.btn--sm {
+  min-height: 32px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.btn--primary {
+  background: var(--color-primary);
+  color: var(--color-bg);
+  border: 1px solid var(--color-primary-border);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  box-shadow: var(--shadow-glow);
+}
+
+.btn--destructive {
+  background: var(--color-secondary);
+  color: var(--color-text);
+  border: 1px solid var(--color-secondary-border);
+}
+
+.btn--destructive:hover {
+  background: var(--color-secondary-hover);
+}
+
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: var(--color-border);
+}
+
+/* Chips */
+.chip {
+  display: inline-block;
+  padding: var(--space-xs) 12px;
+  border-radius: var(--radius-sm);
+  font: var(--font-chip);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin: var(--space-md) 0 0;
+}
+
+.chip--ttl {
+  background: rgba(202, 138, 4, 0.13);
+  color: var(--color-primary);
+  margin: 0;
+}
+
+.chip--soon {
+  background: rgba(153, 27, 27, 0.13);
+  color: var(--color-error-text);
+  margin: 0;
+}
+
+.chip--success {
+  background: rgba(34, 197, 94, 0.13);
+  color: var(--color-success);
+}
+
+.chip--error {
+  background: rgba(153, 27, 27, 0.13);
+  color: var(--color-error-text);
+}
+
+/* Liste des fichiers */
+.list {
+  list-style: none;
+  margin: var(--space-md) 0 0;
+  padding: 0;
+}
+
+.list__row {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-surface-raised);
+  transition: background var(--transition);
+}
+
+.list__row:hover {
+  background: var(--color-surface-raised);
+}
+
+.list__main {
+  display: grid;
+  min-width: 0;
+}
+
+.list__name {
+  font: var(--font-body);
+  color: var(--color-text);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list__name:hover {
+  color: var(--color-primary);
+}

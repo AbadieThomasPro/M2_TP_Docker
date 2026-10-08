@@ -18,6 +18,24 @@ Le sujet de départ, un cloud de stockage générique, a été **affiné après 
 | Supprimer un fichier | Avant son expiration, à la demande |
 | Nettoyage automatique | Un worker supprime les fichiers expirés et les envois abandonnés |
 
+### L'interface : « Parchemins éphémères »
+
+![Interface du cloud de fichiers éphémères](docs/interface.png)
+
+Application **Angular 22** d'une seule page, au design **QuestUI** (thème RPG médiéval, voir [questui-DESIGN.md](questui-DESIGN.md)) : les fichiers sont des parchemins qui se consument.
+
+| Élément | Comportement |
+|---|---|
+| Zone de dépôt | Choix du fichier et de sa **durée de vie** (1 heure, 24 heures, 7 jours), envoi avec message de confirmation ou d'erreur (fichier trop gros, quota atteint...) |
+| Coffre | Liste des fichiers : nom (lien de téléchargement), taille, **temps restant** ; total en tête de liste |
+| Chips de durée de vie | Doré « Expire dans... », rouge « Se consume dans... » à moins d'une heure de l'expiration |
+| Temps réel | Le temps restant est recalculé chaque minute dans le navigateur, sans rappeler l'API ; un fichier expiré disparaît de la liste |
+| Destruction | Bouton « Détruire » sur chaque ligne |
+
+L'application reste volontairement minimale (cours Docker, pas cours web) : un composant, un service d'accès à l'API, et du CSS natif bâti sur des variables (aucune librairie UI). Toutes les couleurs, polices, espacements et ombres sont définis **une seule fois** dans `styles.css`, d'après le design system. Les polices sont chargées par le navigateur depuis Google Fonts : rien n'est ajouté dans les images Docker. Le build de production pèse **150 Ko** (45 Ko compressés).
+
+> Sur cette branche, l'application Angular est prête mais **pas encore servie par l'image Docker du front**, qui sert toujours la page Hello World : c'est l'objet du Lot suivant (Dockerfile multi-stage avec build Angular). En développement : `npx ng serve` dans `Frontend/app/`, qui relaie `/api` vers la stack (`proxy.conf.json`).
+
 ### Ce que le sujet permet de montrer avec Docker
 
 | Notion Docker | Mise en œuvre dans le projet |
@@ -41,7 +59,8 @@ Le sujet de départ, un cloud de stockage générique, a été **affiné après 
 | Durée de vie des fichiers, quota, envois atomiques | ✅ Fait |
 | Worker de nettoyage (4e image) : aucun réseau, volume partagé, arrêt propre mesuré | ✅ Fait |
 | Durcissement : systèmes de fichiers en lecture seule (`read_only` + `tmpfs`) | ✅ Fait |
-| Interface web (Angular) | ⏳ À faire |
+| Interface web (Angular, design QuestUI) | ✅ Faite (testée avec `ng serve`) |
+| Image front multi-stage servant l'application Angular | ⏳ À faire |
 | Démonstration du scaling | ⏳ À faire |
 
 ## Architecture actuelle
@@ -206,9 +225,16 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 ├── Frontend/
 │   ├── Dockerfile
 │   ├── server.js        # serveur HTTP Node : sert la page et relaie /api vers la gateway
-│   └── src/
-│       ├── index.html   # page affichée
-│       └── app.js       # JS client : récupère et affiche la phrase
+│   ├── src/
+│   │   ├── index.html   # page Hello World (servie par l'image jusqu'au passage à Angular)
+│   │   └── app.js
+│   └── app/             # application Angular 22 « Parchemins éphémères »
+│       ├── package.json, package-lock.json, angular.json, tsconfig*.json
+│       ├── proxy.conf.json      # dev : ng serve relaie /api vers la stack (127.0.0.1:8080)
+│       └── src/
+│           ├── index.html       # polices du design (Google Fonts)
+│           ├── styles.css       # design system QuestUI en variables CSS + composants
+│           └── app/             # composant unique (app.*) + service d'accès à l'API (files.service.ts)
 ├── Backend/
 │   ├── Dockerfile
 │   ├── package.json     # dépendances : express, multer
@@ -226,7 +252,8 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 │   ├── Dockerfile           # outil de charge ab (profil compose "bench")
 │   └── run-bench.ps1        # mesure CPU/mémoire de chaque service sous charge
 ├── docs/
-│   └── architecture.png     # export image du schéma d'architecture (Mermaid)
+│   ├── architecture.png     # export image du schéma d'architecture (Mermaid)
+│   └── interface.png        # capture de l'interface
 ├── docker-compose.yml       # orchestration des 3 conteneurs
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF

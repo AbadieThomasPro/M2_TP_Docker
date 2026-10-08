@@ -127,4 +127,6 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - PowerShell 5.1 lit les scripts `.ps1` en ANSI : éviter les remplacements de texte accentué par script. Pour modifier des fichiers, utiliser l'outil d'édition, ou Node.
 - En PowerShell, `@(@("a","b"))` est aplati en `@("a","b")` : attention aux tableaux de paires.
 - `sed` et `git` ne sont pas disponibles dans le Bash de l'agent : utiliser PowerShell pour git.
+- **Disque C: plein** sur le poste : npm échoue (`ENOSPC`) car son cache et ses fichiers temporaires sont sur C:. Lancer npm via `cmd` avec le cache et `TEMP` sur D: : `cmd /c "set TEMP=D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache\tmp&& set TMP=...&& cd Frontend\app && npm install --cache D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache"`.
+- Application Angular : `Frontend/app/` (Angular 22). Dev : `npx ng serve` (proxy `/api` → `127.0.0.1:8080`, la stack doit tourner).
 - Les `.sh` doivent rester en fins de ligne LF (`.gitattributes`), sinon ils ne s'exécutent pas dans le conteneur.
