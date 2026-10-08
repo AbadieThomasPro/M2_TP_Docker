@@ -39,12 +39,19 @@ LABEL org.opencontainers.image.title="docker-cloud-back" \
 # --no-cache : l'index apk ne sert plus après l'install, inutile de l'embarquer
 RUN apk add --no-cache nodejs tini tzdata
 
-# Utilisateur dédié, distinct du front : en cas de faille, l'attaquant n'est pas root
-RUN adduser -D -H back
+# GID du groupe partagé en ARG, fourni par .env : le cleaner doit recevoir exactement la même valeur
+# pour pouvoir supprimer les fichiers du back (un nom de groupe ne compte pas, seul le numéro compte)
+ARG STORAGE_GID=1500
 
-# Dossier de stockage créé et donné à "back" AVANT le VOLUME : Docker recopie ces droits
-# dans un volume neuf, sinon il appartiendrait à root et l'API (non-root) ne pourrait pas y écrire
-RUN mkdir -p /data/files && chown -R back:back /data
+# Groupe "stockage" partagé avec le cleaner, et utilisateur dédié "back" dont c'est le groupe principal :
+# les fichiers qu'il crée appartiennent au groupe. Non-root : en cas de faille, l'attaquant n'est pas root
+RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -G stockage back
+
+# Dossier de stockage (et .incoming pour les envois en cours) créé AVANT le VOLUME : Docker recopie
+# ces droits dans un volume neuf, sinon il appartiendrait à root et l'API (non-root) ne pourrait pas écrire.
+# 2775 : groupe en écriture (le cleaner supprime = écrit dans le DOSSIER) et bit setgid (tout ce qui
+# est créé dedans hérite du groupe stockage)
+RUN mkdir -p /data/files/.incoming && chown -R back:stockage /data && chmod -R 2775 /data
 
 # Données hors de la couche du conteneur : elles survivent à sa suppression et à un rebuild,
 # même lancé sans compose (Docker crée alors un volume anonyme au lieu d'écrire dans le conteneur)
@@ -58,12 +65,16 @@ ARG PORT=3000
 # PHRASE en ENV : changer la réponse de l'API ne demande pas de rebuild
 # STORAGE_DIR en ENV : le code lit le chemin au lieu de l'écrire en dur (doit rester sous /data, le volume)
 # MAX_UPLOAD_MB : même défaut que la gateway, le back refuse aussi les fichiers trop gros
+# TTL_* : durée de vie des fichiers (heures) ; STORAGE_QUOTA_MB : 0 = pas de quota par défaut
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
     NODE_OPTIONS="--max-old-space-size=128" \
     PHRASE="Hello World depuis le back !" \
     STORAGE_DIR=/data/files \
-    MAX_UPLOAD_MB=10
+    MAX_UPLOAD_MB=10 \
+    TTL_DEFAULT_H=24 \
+    TTL_MAX_H=168 \
+    STORAGE_QUOTA_MB=0
 
 # Indique à l'utilisateur de l'image le port de l'API
 EXPOSE ${PORT}

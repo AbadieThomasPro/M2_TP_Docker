@@ -4,37 +4,45 @@ Mise en place d'une architecture virtualisée basée sur Docker : images personn
 
 Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
 
-## Sujet : mini cloud de stockage
+## Sujet : cloud de fichiers éphémères
 
-Un service de stockage de fichiers simplifié, à la manière d'un Google Drive minimal, hébergé sur notre propre « cloud » Docker.
+Un service de partage de **fichiers temporaires**, sur le modèle de WeTransfer, hébergé sur notre propre « cloud » Docker. Chaque fichier envoyé a une **durée de vie** (1 h, 24 h, 7 jours...) : passé ce délai, il n'est plus téléchargeable, puis il est supprimé automatiquement par un service dédié.
+
+Le sujet de départ, un cloud de stockage générique, a été **affiné après un retour du prof** : une spécificité (les fichiers temporaires) donne davantage de choix Docker à concevoir et à justifier.
 
 | Fonctionnalité | Description |
 |---|---|
-| Envoyer un fichier | Upload depuis la page web |
-| Lister les fichiers | Nom, taille, date d'envoi |
-| Télécharger un fichier | Lien de téléchargement |
-| Supprimer un fichier | Bouton de suppression |
+| Envoyer un fichier | Avec une durée de vie choisie (défaut 24 h, maximum 7 jours) |
+| Lister les fichiers | Nom, taille, date d'envoi, **date d'expiration** ; les fichiers expirés n'apparaissent plus |
+| Télécharger un fichier | Sous son nom d'origine ; `410 Gone` si le fichier a expiré |
+| Supprimer un fichier | Avant son expiration, à la demande |
+| Nettoyage automatique | Un worker supprime les fichiers expirés et les envois abandonnés *(Lot A5, en cours)* |
 
 ### Ce que le sujet permet de montrer avec Docker
 
 | Notion Docker | Mise en œuvre dans le projet |
 |---|---|
-| Images personnalisées | 3 images construites depuis `alpine` : front (Node), back (Node), gateway (nginx). |
+| Images personnalisées | Images construites depuis `alpine` : front (Node), back (Node, multi-stage), gateway (nginx), puis le worker de nettoyage (shell BusyBox). |
 | Persistance | Les fichiers sont stockés dans un **volume Docker** : ils survivent à l'arrêt, à la suppression et à la reconstruction des conteneurs. |
+| Volume partagé | Le back écrit et le worker supprime dans le même volume, grâce à un **groupe Unix commun** (`stockage`, même GID dans les deux images). |
 | Isolation réseau | Seul le front est publié. La gateway et le back restent sur deux réseaux internes séparés : le front ne peut joindre le back qu'à travers la gateway. |
-| Limitation des ressources | CPU et mémoire par conteneur, plus une taille max d'upload imposée par nginx (`client_max_body_size`). |
-| Scalabilité | Plusieurs instances du back derrière la gateway nginx, qui répartit la charge (voir [Scalabilité](#scalabilité)). |
+| Arguments au run | Durée de vie par défaut et maximale, quota de stockage, taille max d'envoi : réglables dans le `.env`, sans rebuild. |
+| Limitation des ressources | CPU et mémoire par conteneur, dimensionnés par un benchmark, plus une taille max d'envoi et un quota de stockage. |
+| Scalabilité | Plusieurs instances du back derrière la gateway nginx. L'expiration est inscrite dans le nom des fichiers, donc le back reste sans état (voir [Scalabilité](#scalabilité)). |
 
 ### Avancement
 
 | Étape | Statut |
 |---|---|
-| 3 images (front, back, gateway), compose, réseaux, healthchecks, SIGTERM | ✅ Fait |
-| Chaîne front → gateway → back fonctionnelle (`/api/phrase`) | ✅ Fait |
+| 3 images (front, back, gateway), compose, réseaux, healthchecks, SIGTERM, benchmark | ✅ Fait |
 | Volume `stockage` monté sur le back (droits, persistance testés) | ✅ Fait |
-| API de fichiers (upload, liste, téléchargement, suppression) | ⏳ À faire |
-| Interface web du stockage | ⏳ À faire |
-| Scalabilité du back (plusieurs instances, répartition par nginx) | ⏳ À faire |
+| API de fichiers en Express (envoi, liste, téléchargement, suppression), image multi-stage | ✅ Fait |
+| Gateway : envois en flux, découverte des instances du back (`resolver`) | ✅ Fait |
+| Durée de vie des fichiers, quota, envois atomiques | ✅ Fait |
+| Worker de nettoyage (4e image) | ⏳ À faire |
+| Durcissement : systèmes de fichiers en lecture seule | ⏳ À faire |
+| Interface web (Angular) | ⏳ À faire |
+| Démonstration du scaling | ⏳ À faire |
 
 ## Architecture actuelle
 
@@ -347,15 +355,15 @@ Seul, le front sert la page, mais `/api/phrase` renvoie `502` tant qu'aucune gat
 
 ## Image Backend
 
-API du mini cloud de stockage, en **Express + multer**. Elle lit et écrit les fichiers directement dans `STORAGE_DIR` (le volume `stockage`), sans base de données. Le front l'appelle en passant par la gateway.
+API du cloud de fichiers éphémères, en **Express + multer**. Elle lit et écrit les fichiers directement dans `STORAGE_DIR` (le volume `stockage`), sans base de données : la **date d'expiration est inscrite dans le nom** de chaque fichier stocké. Le front l'appelle en passant par la gateway.
 
 ### Routes
 
 | Route | Réponse |
 |---|---|
-| `GET /api/files` | `200` : liste `[{ name, originalName, size, date }]`, du plus récent au plus ancien |
-| `POST /api/files` | Envoi d'un fichier (multipart, champ `file`) : `201` `{ name, originalName, size }` ; `400` sans fichier ; `413` au-delà de `MAX_UPLOAD_MB` |
-| `GET /api/files/:name` | `200` : téléchargement sous le nom d'origine ; `404` si absent |
+| `GET /api/files` | `200` : liste `[{ name, originalName, size, date, expiresAt }]` des fichiers **non expirés**, du plus récent au plus ancien |
+| `POST /api/files` | Envoi d'un fichier (multipart : champ `file`, champ `ttl` optionnel en heures) : `201` `{ name, originalName, size, expiresAt }` ; `400` sans fichier ou `ttl` invalide ; `413` au-delà de `MAX_UPLOAD_MB` ; `507` si le quota de stockage est atteint |
+| `GET /api/files/:name` | `200` : téléchargement sous le nom d'origine ; `410 Gone` si le fichier a expiré ; `404` si absent |
 | `DELETE /api/files/:name` | `204` ; `404` si absent |
 | `GET /api/phrase` | `{"phrase": "..."}` : route de la version Hello World, gardée tant que le front l'utilise |
 | `GET /health` | `OK` : utilisée par le healthcheck |
@@ -369,7 +377,12 @@ Chaque réponse porte un en-tête **`X-Served-By`** avec le nom du conteneur qui
 |---|---|
 | Express + multer | Express route les requêtes en quelques lignes ; multer gère le format multipart des envois, pénible à décoder à la main. Ce sont les deux seules dépendances. |
 | Stockage sur disque (`multer.diskStorage`) | Le fichier est écrit **en flux** dans le volume : un fichier de 50 Mo ne passe jamais entièrement en mémoire. Cela compte avec une limite de 128 Mo par conteneur. |
-| Nom stocké = `<horodatage>-<aléatoire>__<nom d'origine>` | Deux envois du même nom, ou deux instances du back qui écrivent en même temps, n'écrasent rien. Le nom d'origine est retrouvé pour le téléchargement. |
+| Nom stocké = `<expiration en secondes epoch>-<aléatoire>__<nom d'origine>` | **L'expiration est dans le nom** : pas de base de données ni de fichier annexe. Le back reste sans état (n'importe quelle instance sait si un fichier a expiré), et le worker de nettoyage la lit sans jamais parler à l'API. La partie aléatoire évite les écrasements entre deux envois du même nom ou entre instances. |
+| Envoi dans `.incoming/`, puis **renommage atomique** | Le champ `ttl` peut arriver après le fichier dans le formulaire : l'expiration n'est connue qu'à la fin de l'envoi. Le fichier est donc écrit sous un nom temporaire `.part` dans `.incoming/`, puis renommé avec sa date d'expiration. Le renommage est atomique car `.incoming/` est **dans le même volume** : un fichier partiel n'apparaît jamais dans la liste. Un envoi refusé (`400`, `507`) est supprimé, un envoi interrompu reste dans `.incoming/` jusqu'au passage du worker (testé). |
+| Pas de `tmpfs` pour les envois en cours | Un `tmpfs` est de la RAM **comptée dans la limite mémoire** du conteneur : 50 Mo par envoi simultané feraient dépasser les 128 Mo du back. Et un déplacement `tmpfs` → volume imposerait une copie complète, puisque ce sont deux systèmes de fichiers différents. |
+| Fichier expiré : masqué et `410 Gone` | Le worker ne passe que toutes les N secondes : entre l'expiration et sa suppression, l'API ne doit déjà plus le lister ni le servir. `410` (« n'existe plus ») est plus juste que `404` (« n'a jamais existé »). |
+| `ttl` entre 1 minute et `TTL_MAX_H` | En dessous d'une minute, le fichier expirerait avant d'avoir pu être partagé ; au-delà du maximum, ce n'est plus du stockage temporaire. |
+| Quota `STORAGE_QUOTA_MB` (`507 Insufficient Storage`) | Protège le disque de l'hôte : même avec des durées de vie, des envois peuvent s'accumuler avant d'expirer. |
 | Nom d'origine nettoyé | Seuls lettres (accents compris), chiffres, espaces et `. _ -` sont gardés : pas de chemin ni de caractère spécial dans le volume. |
 | Contrôle du `:name` demandé | `path.basename` doit être identique au nom, et les noms cachés (`.xxx`) sont refusés : `../` ou `%2F` ne permettent pas de sortir du dossier de stockage (testé : `404`). |
 | `MAX_UPLOAD_MB` aussi dans le back | Même limite que la gateway : une double sécurité si le back est appelé sans elle. Un envoi refusé ne laisse aucun fichier partiel (testé). |
@@ -418,8 +431,8 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 | Instruction | Explication |
 |---|---|
 | `ENV TZ=Europe/Paris` | Fuseau horaire du conteneur. |
-| `RUN adduser -D -H back` | Crée un utilisateur `back` sans mot de passe ni dossier personnel. L'API ne tourne pas en root. Un utilisateur distinct de celui du front permet d'identifier chaque service. |
-| `RUN mkdir -p /data/files && chown -R back:back /data` | Crée le dossier de stockage et le donne à `back` **avant** l'instruction `VOLUME`. Quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. Sans ce `chown`, le volume appartiendrait à root et l'API, non-root, ne pourrait pas écrire. Vérifié : `/data` et `/data/files` appartiennent à `back`. |
+| `RUN addgroup -g ${STORAGE_GID} stockage && adduser -D -H -G stockage back` | Crée le groupe `stockage`, avec un **GID fixe** venant d'un ARG, et l'utilisateur `back` (sans mot de passe ni dossier personnel) dont c'est le groupe principal : tout ce qu'il crée appartient au groupe. L'API ne tourne pas en root. Le GID est fixé parce que le worker de nettoyage doit appartenir au **même** groupe : pour le noyau, seul le numéro compte, pas le nom. |
+| `RUN mkdir -p /data/files/.incoming && chown -R back:stockage /data && chmod -R 2775 /data` | Crée le dossier de stockage (et `.incoming/` pour les envois en cours) **avant** l'instruction `VOLUME` : quand Docker crée un volume neuf, il y recopie le contenu et les droits de ce dossier de l'image. `2775` : le groupe peut écrire dans le dossier, ce qui permettra au worker de supprimer (supprimer un fichier = écrire dans le **dossier**, pas dans le fichier). Le bit **setgid** (`2`) fait hériter du groupe `stockage` tout ce qui est créé dedans. Vérifié : `drwxrwsr-x back stockage`, et un fichier envoyé appartient bien à `back:stockage`. |
 | `VOLUME /data` | Déclare `/data` comme dossier de données hors de la couche du conteneur. Même avec un simple `docker run`, sans compose, Docker crée un volume anonyme au lieu d'écrire dans le conteneur. Toute instruction placée après `VOLUME` qui modifierait `/data` serait ignorée : d'où le `chown` juste avant. |
 | `WORKDIR /app` | Dossier de travail de l'application. |
 | `COPY --from=deps /app/node_modules ./node_modules` | Récupère seulement les dépendances déjà installées par le stage `deps`, pas npm. |
@@ -438,6 +451,7 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 |---|---|---|
 | `ALPINE_VERSION` | `3.20` | Version de l'OS de base. |
 | `PORT` | `3000` | Port documenté (`EXPOSE`) et valeur par défaut de `ENV PORT`. |
+| `STORAGE_GID` | `1500` | GID du groupe `stockage`, partagé avec le worker de nettoyage. Fourni par le `.env` aux deux images : une seule valeur, donc toujours identique. |
 
 ### Arguments attendus au run (ENV)
 
@@ -448,6 +462,9 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 | `PHRASE` | `Hello World depuis le back !` | Phrase renvoyée par `/api/phrase`. Elle peut être changée au lancement sans rebuild de l'image. |
 | `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
 | `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un envoi, la même que pour la gateway. Double sécurité : le back refuse aussi (`413`) si on l'appelle sans passer par la gateway. |
+| `TTL_DEFAULT_H` | `24` | Durée de vie (heures) d'un fichier envoyé sans `ttl`. |
+| `TTL_MAX_H` | `168` | Durée de vie maximale acceptée (7 jours) ; au-delà → `400`. |
+| `STORAGE_QUOTA_MB` | `0` (`1024` dans le `.env`) | Taille totale maximale des fichiers stockés ; `0` = pas de quota. Au-delà → `507`. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |
 
 ### Healthcheck
@@ -628,7 +645,7 @@ Toutes les valeurs viennent du fichier `.env` (voir [Variables : ARG, ENV et .en
 
 | Service | `build.args` (ARG) | `environment:` (ENV) | Variables du `.env` utilisées |
 |---|---|---|---|
-| `back` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
+| `back` | `ALPINE_VERSION`, `PORT`, `STORAGE_GID` | `PORT`, `NODE_OPTIONS`, `PHRASE`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `TZ` | `BACK_PORT`, `BACK_NODE_MAX_MEMORY`, `BACK_PHRASE`, `STORAGE_DIR`, `STORAGE_GID`, `MAX_UPLOAD_MB`, `TTL_DEFAULT_H`, `TTL_MAX_H`, `STORAGE_QUOTA_MB`, `BACK_CPUS`, `BACK_MEMORY`, `BACK_MEMORY_RESERVATION` |
 | `gateway` | `ALPINE_VERSION`, `PORT` | `PORT`, `WORKER_PROCESSES`, `WORKER_CONNECTIONS`, `BACK_HOST`, `BACK_PORT`, `MAX_UPLOAD_MB`, `TZ` | `GATEWAY_PORT`, `GATEWAY_WORKER_PROCESSES`, `GATEWAY_WORKER_CONNECTIONS`, `GATEWAY_CPUS`, `GATEWAY_MEMORY`, `GATEWAY_MEMORY_RESERVATION`, `BACK_PORT`, `MAX_UPLOAD_MB` |
 | `front` | `ALPINE_VERSION`, `PORT` | `PORT`, `NODE_OPTIONS`, `GATEWAY_HOST`, `GATEWAY_PORT`, `TZ` | `FRONT_PORT`, `FRONT_PUBLISHED_PORT`, `FRONT_NODE_MAX_MEMORY`, `FRONT_CPUS`, `FRONT_MEMORY`, `FRONT_MEMORY_RESERVATION`, `GATEWAY_PORT` |
 
@@ -801,6 +818,8 @@ volumes:
 | `docker compose down` puis `up` | ✅ Conservés : un fichier écrit par `back` est toujours là après le redémarrage. |
 | `docker compose up --build` (rebuild) | ✅ Conservés : le volume est indépendant de l'image. |
 | `docker compose down -v` | ❌ Supprimés : le volume `docker-cloud_stockage` est détruit. |
+
+**Attention :** Docker ne recopie le contenu et les droits du dossier de l'image que dans un volume **vide**. Après un changement des droits dans le Dockerfile (comme l'ajout du groupe `stockage`), un volume existant garde les anciens droits : il faut le recréer avec `docker compose down -v`.
 
 Commandes utiles : `docker volume inspect docker-cloud_stockage` (emplacement sur l'hôte Docker), `docker compose exec back ls -l /data/files`.
 

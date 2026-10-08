@@ -10,6 +10,7 @@ services:
       args:
         ALPINE_VERSION: ${ALPINE_VERSION}
         PORT: ${BACK_PORT}
+        STORAGE_GID: ${STORAGE_GID}   # même valeur que le cleaner : droits partagés sur le volume
     # Nom d'image fixe : réutilisable tel quel par Swarm, qui ignore build:
     image: docker-cloud/back
     # Surcharge des ENV au run : changer un réglage ne demande pas de rebuild
@@ -20,6 +21,9 @@ services:
       PHRASE: ${BACK_PHRASE}
       STORAGE_DIR: ${STORAGE_DIR}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB}   # même valeur que la gateway : double sécurité
+      TTL_DEFAULT_H: ${TTL_DEFAULT_H}
+      TTL_MAX_H: ${TTL_MAX_H}
+      STORAGE_QUOTA_MB: ${STORAGE_QUOTA_MB}
       TZ: ${TZ}
     # Volume nommé plutôt que bind mount : géré par Docker, portable (pas de chemin propre à la machine)
     # et réutilisé à chaque up, alors que le VOLUME seul créerait un volume anonyme différent à chaque fois
