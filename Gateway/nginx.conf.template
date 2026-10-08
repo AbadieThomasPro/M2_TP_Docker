@@ -1,9 +1,11 @@
-# Modèle de config : les ${VARIABLES} sont remplacées au démarrage par entrypoint.sh
+# Modèle plutôt que config figée : les ${VARIABLES} sont remplacées au run par entrypoint.sh
 
+# Un worker par CPU alloué : plus de workers que de CPU n'apporterait rien
 worker_processes ${WORKER_PROCESSES};
 
-# Fichiers d'exécution dans /tmp, accessible en écriture sans être root
+# /tmp car nginx tourne sans root et ne peut pas écrire ailleurs
 pid /tmp/nginx.pid;
+# Logs sur la sortie standard : visibles avec docker logs, pas de fichier qui grossit dans le conteneur
 error_log /dev/stderr warn;
 
 events {
@@ -13,6 +15,7 @@ events {
 http {
     access_log /dev/stdout;
 
+    # Fichiers temporaires dans /tmp pour la même raison (utilisateur non-root)
     client_body_temp_path /tmp/client_body;
     proxy_temp_path       /tmp/proxy;
     fastcgi_temp_path     /tmp/fastcgi;
@@ -22,13 +25,13 @@ http {
     server {
         listen ${PORT};
 
-        # Santé de la gateway elle-même (healthcheck)
+        # Réponse directe sans passer par le back : le healthcheck ne teste que la gateway
         location = /health {
             access_log off;
             return 200 "OK";
         }
 
-        # Appels API -> back
+        # Seul chemin autorisé vers le back ; en-têtes transmis pour que le back connaisse le vrai client
         location /api/ {
             proxy_pass http://${BACK_HOST}:${BACK_PORT};
             proxy_set_header Host $host;
@@ -36,7 +39,7 @@ http {
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         }
 
-        # Tout le reste est refusé : la gateway ne sert qu'à joindre l'API
+        # Tout le reste est refusé : la gateway ne doit rien exposer d'autre que l'API
         location / {
             return 404;
         }

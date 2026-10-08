@@ -1,21 +1,24 @@
 name: docker-cloud
 
-# Toutes les valeurs ${...} viennent du fichier .env (lu automatiquement par compose)
+# Valeurs ${...} dans .env : une seule source de configuration, aucune valeur en dur ici
 
 services:
-  # API qui renvoie la phrase
   back:
     build:
       context: ./Backend
-      args:                           # ARG du Dockerfile (build)
+      # ARG du Dockerfile alimentés par .env : même version d'Alpine pour toutes les images
+      args:
         ALPINE_VERSION: ${ALPINE_VERSION}
         PORT: ${BACK_PORT}
+    # Nom d'image fixe : réutilisable tel quel par Swarm, qui ignore build:
     image: docker-cloud/back
-    environment:                      # ENV du Dockerfile surchargées (run)
+    # Surcharge des ENV au run : changer un réglage ne demande pas de rebuild
+    environment:
       PORT: ${BACK_PORT}
-      NODE_MAX_MEMORY: ${BACK_NODE_MAX_MEMORY}   # tas Node (Mo), sous la limite mémoire
+      NODE_MAX_MEMORY: ${BACK_NODE_MAX_MEMORY}   # sous la limite mémoire : Node libère avant d'être tué (OOM)
       PHRASE: ${BACK_PHRASE}
       TZ: ${TZ}
+    # Plafond pour qu'un service ne prive pas les autres de ressources ; minimum garanti en réservation
     deploy:
       resources:
         limits:
@@ -23,12 +26,14 @@ services:
           memory: ${BACK_MEMORY}
         reservations:
           memory: ${BACK_MEMORY_RESERVATION}
+    # 10 s : largement au-dessus du temps d'arrêt mesuré (< 1 s) avant le SIGKILL
     stop_grace_period: 10s
+    # Relance après un crash, mais respecte un arrêt volontaire
     restart: unless-stopped
+    # Réseau interne seulement : le back n'a pas à être joignable depuis l'extérieur
     networks:
       - interne
 
-  # Passerelle d'API (nginx) : liaison front -> back, joignable seulement en interne
   gateway:
     build:
       context: ./Gateway
@@ -40,9 +45,10 @@ services:
       PORT: ${GATEWAY_PORT}
       WORKER_PROCESSES: ${GATEWAY_WORKER_PROCESSES}   # aligné sur la limite CPU
       WORKER_CONNECTIONS: ${GATEWAY_WORKER_CONNECTIONS}
-      BACK_HOST: back                 # nom du service back
-      BACK_PORT: ${BACK_PORT}
+      BACK_HOST: back                 # nom du service : résolu par le DNS Docker, pas d'IP en dur
+      BACK_PORT: ${BACK_PORT}         # même variable que le back : les deux restent cohérents
       TZ: ${TZ}
+    # nginx refuse de démarrer s'il ne peut pas résoudre "back" : on attend qu'il soit prêt
     depends_on:
       back:
         condition: service_healthy
@@ -55,10 +61,10 @@ services:
           memory: ${GATEWAY_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
+    # Pas de ports publiés : seul le front doit pouvoir joindre la gateway
     networks:
       - interne
 
-  # Page HTML + JS : seul point d'entrée publié sur la machine
   front:
     build:
       context: ./Frontend
@@ -69,11 +75,13 @@ services:
     environment:
       PORT: ${FRONT_PORT}
       NODE_MAX_MEMORY: ${FRONT_NODE_MAX_MEMORY}
-      GATEWAY_HOST: gateway           # nom du service gateway
+      GATEWAY_HOST: gateway           # nom du service : résolu par le DNS Docker, pas d'IP en dur
       GATEWAY_PORT: ${GATEWAY_PORT}
       TZ: ${TZ}
+    # Seul port publié : le front est l'unique point d'entrée
     ports:
-      - "${FRONT_PUBLISHED_PORT}:${FRONT_PORT}"   # hôte:conteneur
+      - "${FRONT_PUBLISHED_PORT}:${FRONT_PORT}"
+    # La page n'est servie qu'une fois toute la chaîne vers l'API disponible
     depends_on:
       gateway:
         condition: service_healthy
@@ -86,13 +94,14 @@ services:
           memory: ${FRONT_MEMORY_RESERVATION}
     stop_grace_period: 10s
     restart: unless-stopped
+    # public pour être joignable depuis l'hôte, interne pour joindre la gateway
     networks:
       - public
       - interne
 
 networks:
-  # Réseau exposé : seul le front y est branché
+  # Seul le front y est branché : c'est le seul service qui doit être exposé
   public:
-  # Réseau privé sans accès extérieur : gateway et back n'y sont joignables que depuis le front
+  # internal: true pour couper tout accès extérieur à la gateway et au back, qui n'en ont pas besoin
   interne:
     internal: true
