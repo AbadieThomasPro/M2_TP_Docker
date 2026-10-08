@@ -84,6 +84,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 
 ### Documentation
 - Chaque changement d'image ou du compose met à jour le **README.md** (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources).
+- Toute modification d'architecture (service, réseau, port, volume, `depends_on`, ressources) met à jour les **schémas Mermaid** du README (architecture, séquence, ordre de démarrage) et régénère `docs/architecture.png`. Vérifier le rendu avant de livrer (une erreur de syntaxe Mermaid casse l'affichage sur GitHub).
 - Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans le README quand ils justifient un choix.
 
 ### Git

@@ -38,36 +38,77 @@ Un service de stockage de fichiers simplifié, à la manière d'un Google Drive 
 
 ## Architecture actuelle
 
-```
-                 machine hôte
-                      │ :8080 (seul port publié)
-  ┌───────────────────┼──────────────────────────────────────────┐
-  │ réseau "public"   ▼                                          │
-  │            ┌─────────────┐                                   │
-  │            │    front    │  Node : page + relais /api        │
-  │            └──────┬──────┘                                   │
-  ├───────────────────┼──────────────────────────────────────────┤
-  │ "interne-front"   │ http://gateway/api/...  (internal: true) │
-  │                   ▼                                          │
-  │            ┌─────────────┐                                   │
-  │            │   gateway   │  nginx : seul pont front ↔ back   │
-  │            └──────┬──────┘                                   │
-  ├───────────────────┼──────────────────────────────────────────┤
-  │ "interne-back"    │ http://back:3000/api/... (internal: true)│
-  │                   ▼                                          │
-  │            ┌─────────────┐        ┌──────────────────┐       │
-  │            │    back     │ ─────▶ │ volume "stockage"│       │
-  │            │ Node : API  │  /data └──────────────────┘       │
-  │            └─────────────┘                                   │
-  └──────────────────────────────────────────────────────────────┘
+Les schémas ci-dessous sont écrits en [Mermaid](https://mermaid.js.org/) : GitHub les affiche directement, et ils restent versionnés et modifiables comme du code. Une version image du schéma d'architecture est aussi disponible : [docs/architecture.png](docs/architecture.png).
+
+### Schéma d'architecture : services, réseaux, ports, volume
+
+```mermaid
+flowchart TB
+  nav(["🌐 Navigateur"])
+
+  subgraph hote["Machine hôte · Docker"]
+    direction TB
+    subgraph expose["Zone exposée · réseau public"]
+      front["<b>front</b><br/>alpine + Node + tini<br/>écoute :80<br/>0,5 CPU · 192 Mo"]
+    end
+    subgraph interne["Zone interne · réseaux internal: true (sans Internet)"]
+      gateway["<b>gateway</b><br/>alpine + nginx<br/>écoute :80<br/>0,5 CPU · 64 Mo"]
+      back["<b>back</b><br/>alpine + Node + tini<br/>écoute :3000<br/>0,5 CPU · 192 Mo"]
+      vol[("volume <b>stockage</b><br/>monté sur /data")]
+    end
+  end
+
+  nav -- "HTTP :8080<br/>seul port publié (8080→80)" --> front
+  front -- "réseau interne-front<br/>/api/* → http://gateway:80" --> gateway
+  gateway -- "réseau interne-back<br/>/api/* → http://back:3000" --> back
+  back -- "lecture / écriture<br/>/data/files" --> vol
+  front -. "⛔ bloqué : aucun réseau commun" .- back
+
+  classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
+  classDef int fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
+  classDef data fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
+  class front pub
+  class gateway,back int
+  class vol data
 ```
 
-1. Le navigateur charge la page sur `http://localhost:8080` (front).
-2. `app.js` appelle `/api/phrase` sur la même origine, donc le front.
-3. Le `server.js` du front relaie l'appel vers `http://gateway/api/phrase` (nom du service Docker).
-4. La gateway nginx transmet la requête au back (`back:3000`), qui renvoie la phrase en JSON.
+| Élément | À retenir |
+|---|---|
+| Seul port publié | `8080` sur l'hôte → `80` du front. La gateway et le back n'ont aucun `ports:`. |
+| Réseaux | `public` (front), `interne-front` (front + gateway), `interne-back` (gateway + back). La gateway est le seul pont : le lien direct front → back est bloqué. |
+| Volume | `stockage`, monté sur `/data` du back uniquement. |
+| Ressources | Limites CPU / mémoire par service, issues du `.env`. |
 
-Seul le front est accessible depuis l'extérieur. La gateway et le back ne sont joignables que sur les réseaux internes, et le front ne peut joindre le back **qu'à travers la gateway**.
+### Schéma des communications : chemin d'une requête
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor N as Navigateur
+  participant F as front (Node)
+  participant G as gateway (nginx)
+  participant B as back (Node)
+  N->>F: GET / sur 127.0.0.1:8080
+  F-->>N: index.html + app.js
+  N->>F: GET /api/phrase (même origine, pas de CORS)
+  F->>G: relais vers http://gateway/api/phrase (interne-front)
+  G->>B: proxy_pass vers http://back:3000/api/phrase (interne-back)
+  B-->>G: 200 {"phrase": "..."}
+  G-->>F: 200
+  F-->>N: 200, phrase affichée dans la page
+  Note over N,G: Envoi plus gros que MAX_UPLOAD_MB : la gateway répond 413 sans contacter le back
+```
+
+Le navigateur ne connaît que le front : il ne peut pas résoudre les noms de service Docker (`gateway`, `back`). C'est le `server.js` du front qui relaie `/api` vers la gateway, puis nginx qui transmet au back.
+
+### Ordre de démarrage
+
+```mermaid
+flowchart LR
+  B["<b>1 · back</b><br/>healthcheck GET /health"] -- "service_healthy" --> G["<b>2 · gateway</b><br/>healthcheck GET /health"] -- "service_healthy" --> F["<b>3 · front</b><br/>healthcheck GET /"]
+```
+
+Chaque service attend que le précédent soit `healthy` (`depends_on: condition: service_healthy`) : nginx refuse de démarrer s'il ne peut pas résoudre `back`, et le front n'est ouvert qu'une fois toute la chaîne prête.
 
 ## Architecture cible
 
@@ -141,6 +182,8 @@ Chaque réponse du back contiendra un en-tête `X-Served-By` avec le nom du cont
 │   ├── Dockerfile
 │   ├── nginx.conf.template  # config nginx avec ${VARIABLES} remplacées au démarrage
 │   └── entrypoint.sh        # génère la config puis lance nginx
+├── docs/
+│   └── architecture.png     # export image du schéma d'architecture (Mermaid)
 ├── docker-compose.yml       # orchestration des 3 conteneurs
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
