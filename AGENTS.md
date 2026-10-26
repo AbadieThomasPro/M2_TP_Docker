@@ -55,7 +55,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Au moins 3 types d'images : front, back, « serveur web » (la gateway nginx).
 - Chaque conteneur reçoit des **arguments au run** pour régler ses ressources.
 
-**Barème** (une ligne de README doit couvrir chaque point) : mise en forme, dépendances installées, manipulations sur l'OS, arguments attendus, entrypoints, arguments traduits dans le compose, limites de ressources expliquées, gestion de SIGTERM, dépendances entre conteneurs, schéma des communications.
+**Barème** (chaque point doit être couvert dans `docs/` et dans le PDF du rendu) : mise en forme, dépendances installées, manipulations sur l'OS, arguments attendus, entrypoints, arguments traduits dans le compose, limites de ressources expliquées, gestion de SIGTERM, dépendances entre conteneurs, schéma des communications.
 
 ## Règles de travail
 
@@ -80,15 +80,15 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 
 ### Ressources
 - Chaque service a `deploy.resources.limits` (cpus, memory), `reservations.memory` et **`memswap_limit` égal à la limite mémoire** : sans ça, Docker double la limite en swap (mesuré) et le service ralentit au lieu d'être arrêté.
-- Les valeurs du `.env` sont **justifiées par le benchmark** (`Bench/run-bench.ps1`, section Benchmark du README) : CPU proportionnel au coût par requête de chaque service, mémoire selon le pic mesuré. nginx consomme bien moins que Node (environ 4 Mo contre 20 à 25 Mo) : ne pas lui donner autant.
+- Les valeurs du `.env` sont **justifiées par le benchmark** (`Bench/run-bench.ps1`, `docs/benchmark.md`) : CPU proportionnel au coût par requête de chaque service, mémoire selon le pic mesuré. nginx consomme bien moins que Node (environ 4 Mo contre 20 à 25 Mo) : ne pas lui donner autant.
 - Tas Node (`*_NODE_MAX_MEMORY`) à la moitié de la limite mémoire du conteneur. Réservation minimale imposée par Docker : 6 Mo.
-- Toute modification des services ou des limites : relancer le benchmark et mettre à jour les tableaux du README.
+- Toute modification des services ou des limites : relancer le benchmark et mettre à jour les tableaux de `docs/benchmark.md` (et du PDF).
 
 ### ARG / ENV / .env
 - **ARG** = build uniquement (`ALPINE_VERSION`, `PORT` → `EXPOSE` + défaut de `ENV PORT`).
 - **ENV** = valeurs par défaut dans l'image : l'image doit fonctionner seule, sans compose.
 - **`.env`** = valeurs du déploiement, injectées par le compose (`build.args` pour les ARG, `environment:` pour les ENV, `deploy.resources` / `ports`). Aucune valeur en dur dans le compose, sauf les noms de service (`back`, `gateway`).
-- Toute nouvelle variable : défaut en ENV + entrée commentée dans `.env` + passage dans le compose + ligne dans le README.
+- Toute nouvelle variable : défaut en ENV + entrée commentée dans `.env` + passage dans le compose + ligne dans `docs/` (fichier de l'image concernée).
 
 ### Interface (design)
 - L'interface du front suit le design system **[questui-DESIGN.md](questui-DESIGN.md)** (« QuestUI », thème RPG médiéval) : couleurs, typographie (Cinzel / Spectral / Fira Code), espacements, rayons, ombres dorées, composants (boutons, cartes, inputs, listes, chips) et leurs règles « Do / Don't ».
@@ -98,11 +98,12 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Polices chargées depuis Google Fonts par le navigateur : aucune dépendance ajoutée dans les images Docker.
 
 ### Documentation
-- **Ordre des parties du README** (à respecter pour tout ajout) : Sujet → Sommaire → Démarrage rapide → Architecture → Structure → Configuration (ARG / ENV / `.env`) → Les images : points communs → Image Frontend → Gateway → Backend → Cleaner → Orchestration → Benchmark → Scalabilité → Tests et vérifications. Les sections d'image gardent le même plan. Toute nouvelle partie de niveau 2 est ajoutée au sommaire ; les liens internes sont vérifiés (aucune ancre cassée).
-- Chaque changement d'image ou du compose met à jour le **README.md** (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources).
-- Toute modification d'architecture (service, réseau, port, volume, `depends_on`, ressources) met à jour les **schémas Mermaid** du README (architecture, séquence, ordre de démarrage) et régénère `docs/architecture.png`. Vérifier le rendu avant de livrer (une erreur de syntaxe Mermaid casse l'affichage sur GitHub).
+- **README court et fonctionnel** : présentation, prérequis, installation et lancement, extrait du `.env`, mode Swarm, structure, index de la documentation. Pas de détail verbeux : il va dans `docs/`.
+- **Documentation détaillée dans `docs/`**, un fichier par partie (index : `docs/README.md`) : `sujet.md`, `architecture.md`, `configuration.md`, `images/{points-communs,frontend,gateway,backend,cleaner,autoscaler}.md`, `orchestration.md`, `benchmark.md`, `scalabilite.md`, `tests.md`. Chaque fichier commence par les liens « Retour au README · Documentation ». Les fichiers d'image gardent le même plan. Toute nouvelle partie est ajoutée à l'index et au tableau du README ; les liens relatifs et les ancres sont vérifiés (aucun lien cassé).
+- Chaque changement d'image ou du compose met à jour le fichier `docs/` concerné (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources) ; le README seulement si les commandes ou le `.env` d'exemple changent.
+- Toute modification d'architecture (service, réseau, port, volume, `depends_on`, ressources) met à jour les **schémas Mermaid** (`docs/architecture.md`, `docs/scalabilite.md`) et régénère `docs/architecture.png`. Vérifier le rendu avant de livrer (une erreur de syntaxe Mermaid casse l'affichage sur GitHub).
 - **PDF du rendu** (`docs/documentation-docker-cloud.pdf`, 8 pages) : sa source est `docs/documentation/documentation.html` (mêmes schémas Mermaid que le README, valeurs du `.env`). Toute modification d'architecture, d'image, de ressources ou de mesure s'y reporte, puis `powershell -ExecutionPolicy Bypass -File docs/documentation/generer-pdf.ps1` (Edge headless + serveur local temporaire ; le PDF doit être fermé dans tout lecteur). Vérifier : 8 pages, aucun « Syntax error », schémas non coupés. Style : tableaux, phrases courtes, chaque ligne donne le pourquoi.
-- Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans le README quand ils justifient un choix.
+- Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans `docs/` quand ils justifient un choix.
 
 ### Git
 - **L'agent ne commite pas et ne pousse pas.** À la fin de chaque lot, il propose un message de commit (style conventionnel, corps en français) ; l'utilisateur commite lui-même. Les commandes git en lecture (status, diff, log) sont autorisées.

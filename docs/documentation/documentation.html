@@ -90,7 +90,7 @@
         <tr><td>Lien git</td><td>Ci-dessus, branche <code>main</code></td></tr>
         <tr><td>Plusieurs images</td><td><code>Frontend/</code> <code>Gateway/</code> <code>Backend/</code> <code>Cleaner/</code> <code>Autoscaler/</code></td></tr>
         <tr><td>Un ou plusieurs compose</td><td><code>docker-compose.yml</code> (principal), <code>docker-stack.yml</code> (Swarm)</td></tr>
-        <tr><td>Documentation des choix</td><td>Ce document (synthèse) et <code>README.md</code> (détail, mesures)</td></tr>
+        <tr><td>Documentation des choix</td><td>Ce document (synthèse) et le dossier <code>docs/</code> (détail, mesures) ; <code>README.md</code> : installation</td></tr>
         <tr><td>Schéma de l'architecture</td><td>Pages 2, 3 et 7 (avec légendes)</td></tr>
       </table>
     </div>
@@ -429,7 +429,7 @@ flowchart TB
     <tr><td>Un seul nœud Swarm</td><td>Plusieurs machines demanderaient un registre (<code>registry:2</code> vient du Hub) et un stockage partagé</td></tr>
     <tr><td>Rafale d'envois</td><td>20 envois de 40 Mo : front à 99 % de sa mémoire ; la rafale (~15 s) est plus rapide que l'autoscaler (~40 s)</td></tr>
   </table>
-  <footer>Détail des mesures, des tests et de chaque choix : <code>README.md</code> du dépôt · github.com/AbadieThomasPro/M2_TP_Docker</footer>
+  <footer>Détail des mesures, des tests et de chaque choix : dossier <code>docs/</code> du dépôt · github.com/AbadieThomasPro/M2_TP_Docker</footer>
 </section>
 
 <script type="module">
