@@ -148,7 +148,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - **Socket Docker = accès root à l'hôte** : seul montage autorisé avec le `tmpfs`, aucun réseau, `read_only`, non-root. Pas de `:ro` (trompeur). Toute évolution de l'image doit garder ces protections.
 - `DOCKER_GID=0` sur Docker Desktop (mesuré) ; sur Linux, GID du groupe `docker` de l'hôte.
 - Relancer `swarm-deploy` remet chaque service à son minimum : l'autoscaler réajuste au relevé suivant.
-- Limite connue : une rafale d'envois (~15 s) est plus rapide que sa réaction (~40 s) ; le front atteint 99 % de 128 Mo à 20 envois de 40 Mo (non corrigé).
+- Une rafale d'envois (~15 s) est plus rapide que sa réaction (~40 s) : la mémoire du front et de la gateway est protégée à la source par les tampons TCP plafonnés (`sysctls`, `TCP_BUFFER_MAX_BYTES`). Mesuré : ~23 envois simultanés de 40 Mo sous 80 % par instance du front (avant : OOM dès 20). Ne pas retirer ces `sysctls` sans refaire la mesure.
 
 ### Arrêt d'urgence
 

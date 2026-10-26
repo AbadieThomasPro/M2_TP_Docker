@@ -128,6 +128,10 @@ services:
         tmpfs:
           size: 8388608
     read_only: true
+    # Tampons TCP plafonnés, comme dans le compose (justification dans le .env)
+    sysctls:
+      net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
+      net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
     stop_grace_period: 10s
     networks:
       - interne-front
@@ -169,6 +173,10 @@ services:
     ports:
       - "${FRONT_PUBLISHED_PORT}:${FRONT_PORT}"
     read_only: true
+    # Tampons TCP plafonnés : sans ça, 20 envois simultanés faisaient tuer le front (OOM, mesuré)
+    sysctls:
+      net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
+      net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
     stop_grace_period: 10s
     networks:
       - public
