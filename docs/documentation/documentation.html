@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Docker Cloud – Documentation du rendu</title>
+<style>
+  /* Source du PDF de rendu : imprimée par docs/documentation/generer-pdf.ps1 (Edge headless) */
+  @page { size: A4; margin: 14mm 13mm 14mm 13mm; }
+  :root {
+    --ink: #1b2330; --muted: #5b6575; --line: #d9dee7; --bg-soft: #f5f7fa;
+    --pub: #e6efff; --pub-b: #1d63ed; --int: #efe8fd; --int-b: #7a4fd6;
+    --data: #e3f6ec; --data-b: #1f9d63; --iso: #fdf0e2; --iso-b: #d9771a;
+    --ctl: #fde8e8; --ctl-b: #c0392b; --accent: #1d63ed; --ok: #1f9d63;
+  }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; font-size: 9.6pt; color: var(--ink); line-height: 1.35; }
+  .page { page-break-after: always; break-after: page; }
+  /* last-of-type et non last-child : le script Mermaid suit la dernière page, sinon une page blanche s'ajoute */
+  .page:last-of-type { page-break-after: auto; break-after: auto; }
+  h1 { font-size: 26pt; margin: 0 0 2mm; letter-spacing: -0.5px; }
+  h2 { font-size: 15pt; margin: 0 0 1mm; color: var(--accent); display: flex; align-items: baseline; gap: 3mm; }
+  h2 .crit { font-size: 8.5pt; font-weight: 600; color: var(--muted); background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 0.4mm 2.5mm; }
+  h3 { font-size: 11pt; margin: 4mm 0 1.5mm; }
+  .lead { color: var(--muted); margin: 0 0 3mm; }
+  table { width: 100%; border-collapse: collapse; margin: 1mm 0 2mm; font-size: 8.8pt; }
+  th { background: #eef2f8; text-align: left; font-weight: 600; }
+  th, td { border: 1px solid var(--line); padding: 1.3mm 2mm; vertical-align: top; }
+  tr { break-inside: avoid; }
+  code { font-family: Consolas, monospace; font-size: 8.4pt; background: var(--bg-soft); padding: 0 1mm; border-radius: 2px; }
+  .ok { color: var(--ok); font-weight: 700; }
+  .diagram { border: 1px solid var(--line); border-radius: 6px; padding: 2mm; text-align: center; break-inside: avoid; }
+  .diagram svg { max-width: 100%; height: auto; }
+  /* Hauteur plafonnée : le schéma réduit au lieu de pousser son tableau sur la page suivante */
+  .diagram.h-arch svg { max-height: 172mm; }
+  .diagram.h-swarm svg { max-height: 160mm; }
+  .diagram.h-seq svg { max-height: 95mm; }
+  .legend { display: flex; flex-wrap: wrap; gap: 2mm 5mm; margin: 2mm 0 1mm; font-size: 8.4pt; break-inside: avoid; }
+  .legend span { display: inline-flex; align-items: center; gap: 1.5mm; }
+  .sw { width: 7mm; height: 3.6mm; border-radius: 2px; border: 1.5px solid; display: inline-block; }
+  .ln { width: 9mm; height: 0; border-top: 2px solid var(--ink); display: inline-block; }
+  .ln.dot { border-top-style: dotted; }
+  .legend b { font-weight: 600; }
+  /* Page de garde */
+  .cover-top { border-left: 6px solid var(--accent); padding: 2mm 0 2mm 5mm; margin: 6mm 0 6mm; }
+  .cover-sub { font-size: 12.5pt; color: var(--muted); margin: 0; }
+  .repo { display: block; margin: 5mm 0; padding: 3.5mm 5mm; border: 2px solid var(--accent); border-radius: 8px; background: var(--pub); font-size: 12pt; }
+  .repo a { color: var(--accent); font-weight: 700; text-decoration: none; }
+  .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3mm; margin: 4mm 0 5mm; }
+  .kpi { border: 1px solid var(--line); border-radius: 6px; padding: 2.5mm; text-align: center; background: var(--bg-soft); }
+  .kpi b { display: block; font-size: 18pt; color: var(--accent); }
+  .kpi small { color: var(--muted); font-size: 8pt; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+  /* Barres de ressources */
+  .bar { height: 3mm; background: var(--bg-soft); border: 1px solid var(--line); border-radius: 2px; position: relative; min-width: 28mm; }
+  .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 2px; }
+  .bar.cpu i { background: var(--pub-b); } .bar.mem i { background: var(--data-b); }
+  .flow { display: flex; align-items: center; gap: 2mm; margin: 2mm 0; flex-wrap: wrap; }
+  .chip { border: 1.5px solid; border-radius: 12px; padding: 1mm 3mm; font-weight: 600; font-size: 8.8pt; }
+  .arrow { color: var(--muted); font-size: 8pt; }
+  .note { font-size: 8.4pt; color: var(--muted); margin: 1mm 0; }
+  footer { font-size: 7.5pt; color: var(--muted); margin-top: 3mm; }
+</style>
+</head>
+<body>
+
+<!-- ===================== PAGE 1 : GARDE ===================== -->
+<section class="page">
+  <div class="cover-top">
+    <h1>Docker Cloud</h1>
+    <p class="cover-sub">Cloud de fichiers éphémères : chaque fichier a une durée de vie, un worker supprime les fichiers expirés</p>
+    <p class="cover-sub">M2 – Cours Docker · Thomas Abadie · Octobre 2026</p>
+  </div>
+
+  <div class="repo">Dépôt du projet : <a href="https://github.com/AbadieThomasPro/M2_TP_Docker">github.com/AbadieThomasPro/M2_TP_Docker</a><br>
+    <span class="note">Branche <code>main</code> · lancement : <code>docker compose up -d --build --wait</code> puis <code>http://127.0.0.1:8080</code></span></div>
+
+  <div class="kpis">
+    <div class="kpi"><b>5</b><small>images construites<br>depuis <code>alpine</code></small></div>
+    <div class="kpi"><b>0</b><small>image applicative<br>du Docker Hub</small></div>
+    <div class="kpi"><b>1</b><small>seul port publié<br>(front, 8080)</small></div>
+    <div class="kpi"><b>0</b><small>code de sortie de<br>chaque service à l'arrêt</small></div>
+    <div class="kpi"><b>80 %</b><small>plafond machine<br>de l'autoscaling</small></div>
+  </div>
+
+  <div class="two">
+    <div>
+      <h3>Rendu attendu → où le trouver</h3>
+      <table>
+        <tr><th>Attendu (sujet)</th><th>Dans le dépôt</th></tr>
+        <tr><td>Lien git</td><td>Ci-dessus, branche <code>main</code></td></tr>
+        <tr><td>Plusieurs images</td><td><code>Frontend/</code> <code>Gateway/</code> <code>Backend/</code> <code>Cleaner/</code> <code>Autoscaler/</code></td></tr>
+        <tr><td>Un ou plusieurs compose</td><td><code>docker-compose.yml</code> (principal), <code>docker-stack.yml</code> (Swarm)</td></tr>
+        <tr><td>Documentation des choix</td><td>Ce document (synthèse) et <code>README.md</code> (détail, mesures)</td></tr>
+        <tr><td>Schéma de l'architecture</td><td>Pages 2, 3 et 7 (avec légendes)</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3>Barème → page</h3>
+      <table>
+        <tr><th>Critère</th><th>Page</th></tr>
+        <tr><td>Dépendances installées</td><td>4</td></tr>
+        <tr><td>Manipulations sur l'OS</td><td>4</td></tr>
+        <tr><td>Arguments attendus</td><td>5</td></tr>
+        <tr><td>Entrypoints choisis</td><td>5</td></tr>
+        <tr><td>Arguments traduits dans le compose</td><td>5</td></tr>
+        <tr><td>Limitation des ressources expliquée</td><td>6</td></tr>
+        <tr><td>SIGTERM gérés</td><td>6</td></tr>
+        <tr><td>Dépendances entre conteneurs</td><td>3</td></tr>
+        <tr><td>Schéma des communications</td><td>2, 3, 7</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h3>Les 5 images en une ligne</h3>
+  <table>
+    <tr><th>Image</th><th>Rôle</th><th>Pourquoi elle existe</th></tr>
+    <tr><td><b>front</b></td><td>Sert l'application Angular, relaie <code>/api</code></td><td>Seul point d'entrée : le navigateur ne connaît qu'une adresse</td></tr>
+    <tr><td><b>gateway</b> (serveur web)</td><td>nginx, passerelle d'API</td><td>Seul chemin vers le back : filtre les routes, refuse les envois trop gros (413)</td></tr>
+    <tr><td><b>back</b></td><td>API Express : envoyer, lister, télécharger, supprimer</td><td>Sans état (expiration dans le nom du fichier) : peut être multiplié</td></tr>
+    <tr><td><b>cleaner</b></td><td>Worker : supprime les fichiers expirés</td><td>Aucun réseau : ne parle à personne, agit sur le volume partagé</td></tr>
+    <tr><td><b>autoscaler</b> (Swarm)</td><td>Ajuste le nombre d'instances selon CPU / mémoire</td><td>Swarm n'a pas d'autoscaling natif, et ceux du Hub sont interdits</td></tr>
+  </table>
+  <p class="note">Base <code>alpine:3.22</code> (autorisée par l'enseignant) : tout le reste est installé et configuré par nos soins.</p>
+</section>
+
+<!-- ===================== PAGE 2 : ARCHITECTURE COMPOSE ===================== -->
+<section class="page">
+  <h2>Architecture (docker-compose) <span class="crit">Schéma des communications</span></h2>
+  <p class="lead">Le livrable principal. Le front est le seul service publié ; la gateway est le seul pont vers le back.</p>
+  <div class="diagram h-arch">
+<pre class="mermaid">
+flowchart TB
+  nav(["🌐 Navigateur"])
+  subgraph hote["Machine hôte · Docker"]
+    direction TB
+    subgraph expose["Zone exposée · réseau public"]
+      front["<b>front</b><br/>alpine + Node + tini<br/>écoute :80<br/>0,25 CPU · 128 Mo"]
+    end
+    subgraph interne["Zone interne · réseaux internal: true (sans Internet)"]
+      gateway["<b>gateway</b><br/>alpine + nginx<br/>écoute :80<br/>0,10 CPU · 48 Mo"]
+      back["<b>back</b><br/>alpine + Node + tini<br/>écoute :3000<br/>0,65 CPU · 128 Mo"]
+      vol[("volume <b>stockage</b><br/>monté sur /data")]
+    end
+    subgraph isole["Aucun réseau · network_mode: none"]
+      cleaner["<b>cleaner</b><br/>alpine + shell BusyBox<br/>aucun port<br/>0,10 CPU · 16 Mo"]
+    end
+  end
+  nav <-- "HTTP :8080<br/>seul port publié (8080→80)" --> front
+  front <-- "réseau interne-front<br/>/api/* → http://gateway:80" --> gateway
+  gateway <-- "réseau interne-back<br/>/api/* → http://back:3000" --> back
+  back <-- "lecture + écriture<br/>(groupe stockage)" --> vol
+  cleaner <-- "lecture des noms + suppression<br/>(groupe stockage)" --> vol
+  front -. "⛔ bloqué : aucun réseau commun" .- back
+
+  classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
+  classDef int fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
+  classDef data fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
+  classDef iso fill:#fdf0e2,stroke:#d9771a,color:#1b2330
+  class front pub
+  class gateway,back int
+  class vol data
+  class cleaner iso
+</pre>
+  </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--pub);border-color:var(--pub-b)"></i><b>Public</b> : joignable depuis l'hôte</span>
+    <span><i class="sw" style="background:var(--int);border-color:var(--int-b)"></i><b>Interne</b> : réseaux <code>internal</code>, sans Internet</span>
+    <span><i class="sw" style="background:var(--data);border-color:var(--data-b)"></i><b>Données</b> : volume nommé</span>
+    <span><i class="sw" style="background:var(--iso);border-color:var(--iso-b)"></i><b>Isolé</b> : aucune interface réseau</span>
+    <span><i class="ln"></i>échange (requête → réponse, ou lecture / écriture)</span>
+    <span><i class="ln dot"></i>chemin bloqué</span>
+  </div>
+
+  <table>
+    <tr><th>Élément</th><th>Choix</th><th>Pourquoi</th></tr>
+    <tr><td>Port publié</td><td><code>8080</code> → <code>80</code> du front uniquement</td><td>Une seule porte d'entrée ; 8080 évite le port 80 souvent pris sur l'hôte</td></tr>
+    <tr><td>Réseaux</td><td><code>public</code>, <code>interne-front</code>, <code>interne-back</code></td><td>Avec un seul réseau interne, le front joignait <code>back:3000</code> en direct (testé) ; séparés, il doit passer par la gateway</td></tr>
+    <tr><td>Volume</td><td><code>stockage</code> sur <code>/data</code> (back + cleaner)</td><td>Volume nommé : géré par Docker, portable, survit à <code>down</code> et aux rebuilds</td></tr>
+    <tr><td>Droits partagés</td><td>Groupe <code>stockage</code> (GID 1500), dossier <code>2775</code></td><td>Le cleaner supprime les fichiers du back sans être root ni être « back »</td></tr>
+  </table>
+</section>
+
+<!-- ===================== PAGE 3 : COMMUNICATIONS ET DEMARRAGE ===================== -->
+<section class="page">
+  <h2>Communications et ordre de démarrage <span class="crit">Schéma des communications · Dépendances entre conteneurs</span></h2>
+  <p class="lead">Chemin d'une requête : le navigateur ne connaît que le front, qui relaie vers la gateway, qui relaie vers le back.</p>
+  <div class="diagram h-seq">
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  actor N as Navigateur
+  participant F as front (Node)
+  participant G as gateway (nginx)
+  participant B as back (Node)
+  N->>F: GET / sur 127.0.0.1:8080
+  F-->>N: application Angular (HTML, JS, CSS)
+  N->>F: GET /api/files (même origine, pas de CORS)
+  F->>G: relais vers http://gateway/api/files (interne-front)
+  G->>B: proxy_pass vers http://back:3000/api/files (interne-back)
+  B-->>G: 200 [fichiers non expirés]
+  G-->>F: 200
+  F-->>N: 200, liste affichée
+  Note over N,G: Envoi plus gros que MAX_UPLOAD_MB : la gateway répond 413 sans contacter le back
+</pre>
+  </div>
+  <div class="legend">
+    <span><i class="ln"></i>requête</span>
+    <span><i class="ln dot"></i>réponse</span>
+    <span>① à ⑧ : ordre des échanges</span>
+  </div>
+
+  <h3>Ordre de démarrage (<code>depends_on: condition: service_healthy</code>)</h3>
+  <div class="flow">
+    <span class="chip" style="background:var(--int);border-color:var(--int-b)">1 · back</span>
+    <span class="arrow">healthy →</span>
+    <span class="chip" style="background:var(--int);border-color:var(--int-b)">2 · gateway</span>
+    <span class="arrow">+</span>
+    <span class="chip" style="background:var(--iso);border-color:var(--iso-b)">2 · cleaner</span>
+    <span class="arrow">healthy →</span>
+    <span class="chip" style="background:var(--pub);border-color:var(--pub-b)">3 · front</span>
+  </div>
+  <table>
+    <tr><th>Service</th><th>Attend</th><th>Healthcheck</th><th>Pourquoi cet ordre</th></tr>
+    <tr><td>back</td><td>–</td><td><code>GET /health</code></td><td>Premier : c'est lui qui initialise les droits du volume</td></tr>
+    <tr><td>gateway</td><td>back <i>healthy</i></td><td><code>GET /health</code> sur <code>127.0.0.1</code></td><td>Sans back prêt, elle répondrait <code>502</code> à chaque appel (testé)</td></tr>
+    <tr><td>cleaner</td><td>back <i>healthy</i></td><td>Date de la dernière passe (pas de réseau)</td><td>Le premier conteneur qui monte un volume neuf y copie <b>ses</b> droits : le back doit passer avant</td></tr>
+    <tr><td>front</td><td>gateway <i>healthy</i></td><td><code>GET /</code></td><td>La page n'est servie qu'une fois toute la chaîne vers l'API prête</td></tr>
+  </table>
+  <p class="note">Healthchecks définis dans chaque Dockerfile ; en Swarm (pas de <code>depends_on</code>), l'image du cleaner contient aussi le dossier du volume : l'ordre n'a plus d'importance (vérifié).</p>
+</section>
+
+<!-- ===================== PAGE 4 : IMAGES ===================== -->
+<section class="page">
+  <h2>Les images : dépendances et OS <span class="crit">Dépendances installées · Manipulations sur l'OS</span></h2>
+  <p class="lead">Toutes partent de <code>alpine:${ALPINE_VERSION}</code> (3.22, version fixée dans <code>.env</code>, jamais <code>latest</code>) et installent elles-mêmes leurs outils.</p>
+
+  <h3>Dépendances installées (<code>apk add --no-cache</code>)</h3>
+  <table>
+    <tr><th>Image</th><th>Paquets</th><th>Pourquoi</th><th>Taille</th></tr>
+    <tr><td><b>front</b></td><td>build : <code>nodejs npm</code><br>final : <code>nodejs tini tzdata</code></td><td>Multi-stage : Angular est compilé dans un stage jeté ; l'image finale n'a ni npm ni sources. <code>tini</code> relaie SIGTERM à Node. <code>tzdata</code> : logs à l'heure de Paris</td><td>114 Mo</td></tr>
+    <tr><td><b>gateway</b></td><td><code>nginx gettext-envsubst tzdata</code></td><td>nginx : reverse proxy léger ; <code>gettext-envsubst</code> seul (pas tout gettext) pour générer la config au run</td><td>18 Mo</td></tr>
+    <tr><td><b>back</b></td><td>deps : <code>nodejs npm</code> → <code>npm ci --omit=dev</code><br>final : <code>nodejs tini tzdata</code></td><td>Multi-stage : seul <code>node_modules</code> (express, multer) est copié, pas npm. <code>npm ci</code> : versions exactes du lock</td><td>120 Mo</td></tr>
+    <tr><td><b>cleaner</b></td><td><b>aucun</b></td><td>BusyBox fournit déjà <code>sh awk xargs rm find setsid</code> : pas de runtime pour une boucle de quelques lignes</td><td>13 Mo</td></tr>
+    <tr><td><b>autoscaler</b></td><td><code>docker-cli</code></td><td>Le client suffit (le moteur est celui de l'hôte) ; ni <code>bash</code> ni <code>curl</code>, inutiles</td><td>57 Mo</td></tr>
+  </table>
+
+  <h3>Manipulations sur l'OS</h3>
+  <table>
+    <tr><th>Manipulation</th><th>Où</th><th>Pourquoi</th></tr>
+    <tr><td>Utilisateur dédié, <code>USER</code> non-root</td><td>toutes</td><td>En cas de faille, l'attaquant n'est pas root ; le code reste à root (lecture seule pour l'utilisateur)</td></tr>
+    <tr><td>UID explicites : back <code>1001</code>, cleaner <code>1002</code>, autoscaler <code>1003</code></td><td>back, cleaner, autoscaler</td><td>Par défaut chaque image donne 1000 : back et cleaner étaient confondus par le noyau (constaté en test)</td></tr>
+    <tr><td>Groupe <code>stockage</code> au GID <code>1500</code> (ARG <code>STORAGE_GID</code>)</td><td>back, cleaner</td><td>Seul le numéro compte pour le noyau : même valeur dans les deux images, fournie par <code>.env</code></td></tr>
+    <tr><td><code>mkdir /data/files/.incoming</code> + <code>chmod 2775</code> avant <code>VOLUME</code></td><td>back, cleaner</td><td>Docker recopie ces droits dans le volume neuf ; <code>2775</code> = groupe en écriture + setgid (les fichiers héritent du groupe)</td></tr>
+    <tr><td>Ajout au groupe du socket Docker (ARG <code>DOCKER_GID</code>, 0 mesuré)</td><td>autoscaler</td><td>Piloter Swarm sans être root : groupe secondaire seulement</td></tr>
+    <tr><td><code>COPY --chmod=755</code>, code copié en dernier</td><td>toutes</td><td>Une couche de moins ; le cache garde OS et dépendances quand seul le code change</td></tr>
+    <tr><td><code>read_only: true</code> + <code>tmpfs /tmp</code> limité</td><td>toutes (au run)</td><td>Impossible de modifier le code ou de déposer un binaire ; seul le volume ou <code>/tmp</code> (en RAM) est inscriptible</td></tr>
+  </table>
+</section>
+
+<!-- ===================== PAGE 5 : ENTRYPOINTS ET ARGUMENTS ===================== -->
+<section class="page">
+  <h2>Entrypoints et arguments <span class="crit">Entrypoints · Arguments attendus · Traduits dans le compose</span></h2>
+
+  <h3>Entrypoints choisis (toujours en forme exec)</h3>
+  <table>
+    <tr><th>Image</th><th>ENTRYPOINT / CMD</th><th>Pourquoi</th></tr>
+    <tr><td>front, back</td><td><code>["/sbin/tini","--"]</code> + <code>["node","…"]</code></td><td>Node en PID 1 ignore SIGTERM : <code>tini</code> le relaie et nettoie les zombies. Sans shell intermédiaire</td></tr>
+    <tr><td>gateway</td><td><code>["/entrypoint.sh"]</code> + <code>["nginx","-g","daemon off;",…]</code></td><td>Modèle « wrapper d'init » : le script génère la config depuis l'ENV puis <code>exec "$@"</code> → nginx devient PID 1. CMD remplaçable (<code>nginx -t</code>). <code>STOPSIGNAL SIGQUIT</code> : finit les requêtes en cours</td></tr>
+    <tr><td>cleaner, autoscaler</td><td><code>["/usr/local/bin/…sh"]</code></td><td>Script shell conçu pour être PID 1 : il gère lui-même SIGTERM (<code>trap</code>), pas besoin de tini</td></tr>
+  </table>
+
+  <h3>Arguments : ARG (build) → ENV (défaut de l'image) → <code>.env</code> (déploiement)</h3>
+  <table>
+    <tr><th>Niveau</th><th>Rôle</th><th>Traduction dans le compose</th></tr>
+    <tr><td><b>ARG</b></td><td>Valeur figée au build : <code>ALPINE_VERSION</code>, <code>PORT</code> (→ <code>EXPOSE</code>), <code>STORAGE_GID</code>, <code>DOCKER_GID</code></td><td><code>build.args</code> ← <code>.env</code></td></tr>
+    <tr><td><b>ENV</b></td><td>Défaut dans l'image : l'image démarre seule, sans compose</td><td><code>environment:</code> ← <code>.env</code> (changer une valeur = sans rebuild)</td></tr>
+    <tr><td><b>.env</b></td><td>Source unique de toutes les valeurs ; versionné (aucun secret)</td><td>Aucune valeur en dur dans le compose, sauf les noms de service</td></tr>
+  </table>
+
+  <h3>Arguments attendus au run (principaux)</h3>
+  <table>
+    <tr><th>Variable</th><th>Image</th><th>Valeur (.env)</th><th>Pourquoi</th></tr>
+    <tr><td><code>PORT</code></td><td>toutes sauf cleaner</td><td>80 / 3000</td><td>Même valeur pour <code>EXPOSE</code> et l'écoute</td></tr>
+    <tr><td><code>NODE_OPTIONS</code></td><td>front, back</td><td><code>--max-old-space-size=64</code></td><td>Tas Node à la moitié de la limite mémoire : Node libère avant d'être tué (OOM)</td></tr>
+    <tr><td><code>MAX_UPLOAD_MB</code></td><td>gateway, back</td><td>50</td><td>Refus (413) dès la gateway, double sécurité dans le back</td></tr>
+    <tr><td><code>TTL_DEFAULT_H</code> / <code>TTL_MAX_H</code></td><td>back</td><td>24 / 168</td><td>Durée de vie par défaut (1 journée) et max (7 jours)</td></tr>
+    <tr><td><code>STORAGE_QUOTA_MB</code></td><td>back</td><td>1024</td><td>Protège le disque de l'hôte (<code>507</code> au-delà)</td></tr>
+    <tr><td><code>WORKER_PROCESSES</code> / <code>…CONNECTIONS</code></td><td>gateway</td><td>1 / 512</td><td>Un worker par CPU alloué (moins d'un CPU)</td></tr>
+    <tr><td><code>BACK_HOST</code>, <code>GATEWAY_HOST</code></td><td>gateway, front</td><td><code>back</code>, <code>gateway</code></td><td>Noms de service résolus par le DNS Docker, pas d'IP en dur</td></tr>
+    <tr><td><code>CLEANUP_INTERVAL_S</code></td><td>cleaner</td><td>60</td><td>L'API masque déjà les expirés : seule la libération du disque attend</td></tr>
+    <tr><td><code>AUTOSCALE_*</code></td><td>autoscaler</td><td>voir page 7</td><td>Seuils issus du benchmark</td></tr>
+    <tr><td><code>cpus</code> / <code>memory</code></td><td>tous</td><td>voir page 6</td><td><code>deploy.resources</code> ← <code>.env</code></td></tr>
+  </table>
+</section>
+
+<!-- ===================== PAGE 6 : RESSOURCES ET SIGTERM ===================== -->
+<section class="page">
+  <h2>Ressources et arrêt propre <span class="crit">Limitation des ressources · SIGTERM</span></h2>
+  <p class="lead">Limites dimensionnées par un benchmark (outil <code>ab</code> construit pour l'occasion) : CPU proportionnel au coût mesuré par requête (back / front / gateway ≈ 7 / 3 / 1), mémoire selon le pic mesuré.</p>
+
+  <h3>Limites par service (compose)</h3>
+  <table>
+    <tr><th>Service</th><th>CPU</th><th></th><th>Mémoire</th><th></th><th>Réserv.</th><th>Justification mesurée</th></tr>
+    <tr><td><b>back</b></td><td>0,65</td><td><div class="bar cpu"><i style="width:65%"></i></div></td><td>128 Mo</td><td><div class="bar mem"><i style="width:100%"></i></div></td><td>32 Mo</td><td>Le plus coûteux : ~2,8 ms CPU par liste ; pic ~33 Mo (×4 de marge)</td></tr>
+    <tr><td><b>front</b></td><td>0,25</td><td><div class="bar cpu"><i style="width:25%"></i></div></td><td>128 Mo</td><td><div class="bar mem"><i style="width:100%"></i></div></td><td>32 Mo</td><td>~1,2 ms par requête (relaie tout) ; pic ~37 Mo</td></tr>
+    <tr><td><b>gateway</b></td><td>0,10</td><td><div class="bar cpu"><i style="width:10%"></i></div></td><td>48 Mo</td><td><div class="bar mem"><i style="width:37.5%"></i></div></td><td>8 Mo</td><td>~0,4 ms par requête ; nginx ~4 Mo, pic 26 Mo en envois + tmpfs de 8 Mo</td></tr>
+    <tr><td><b>cleaner</b></td><td>0,10</td><td><div class="bar cpu"><i style="width:10%"></i></div></td><td>16 Mo</td><td><div class="bar mem"><i style="width:12.5%"></i></div></td><td>6 Mo</td><td>10 000 fichiers supprimés en 6 s ; pic ~4 Mo ; 0 % au repos</td></tr>
+  </table>
+  <table>
+    <tr><th>Réglage</th><th>Pourquoi</th></tr>
+    <tr><td><code>memswap_limit</code> = limite mémoire</td><td>Sinon Docker double la limite en swap (mesuré) : le service ralentit au lieu d'être arrêté</td></tr>
+    <tr><td>Réservations mémoire (et CPU en Swarm)</td><td>Minimum garanti ; en Swarm, une instance n'est placée que si la machine peut la tenir</td></tr>
+    <tr><td>Test de dépassement</td><td>Back limité à 6 Mo : tué (<code>OOMKilled</code>, code 137) puis relancé par <code>restart: unless-stopped</code></td></tr>
+  </table>
+
+  <h3>SIGTERM : arrêt propre mesuré</h3>
+  <table>
+    <tr><th>Service</th><th>Mécanisme</th><th>Arrêt</th><th>Code</th></tr>
+    <tr><td>front, back</td><td><code>tini</code> relaie SIGTERM, Node ferme le serveur</td><td>0,73 s / 0,47 s</td><td class="ok">0</td></tr>
+    <tr><td>gateway</td><td><code>STOPSIGNAL SIGQUIT</code> : nginx finit les requêtes en cours</td><td>0,53 s</td><td class="ok">0</td></tr>
+    <tr><td>cleaner</td><td><code>trap</code> ; suppression en arrière-plan + <code>wait</code>, groupe <code>setsid</code> arrêté d'un coup ; chaque suppression est atomique</td><td>0,5 à 0,6 s en pleine passe (10 000 fichiers)</td><td class="ok">0</td></tr>
+    <tr><td>autoscaler</td><td><code>trap</code> ; relevé et <code>sleep</code> en arrière-plan + <code>wait</code></td><td>0,6 s</td><td class="ok">0</td></tr>
+  </table>
+  <p class="note"><code>0</code> = signal traité ; <code>137</code> = signal ignoré, tué au bout de <code>stop_grace_period: 10s</code>. Vérifié avec <code>docker inspect -f '{{.State.ExitCode}}'</code>.</p>
+</section>
+
+<!-- ===================== PAGE 7 : SWARM ET AUTOSCALING ===================== -->
+<section class="page">
+  <h2>Scalabilité : Swarm et autoscaling <span class="crit">Schéma complet</span></h2>
+  <p class="lead"><code>docker-stack.yml</code> : mêmes images et même <code>.env</code> ; le nombre d'instances suit la charge grâce à notre autoscaler.</p>
+  <div class="diagram h-swarm">
+<pre class="mermaid">
+flowchart TB
+  nav(["🌐 Navigateur"])
+  subgraph swarm["Nœud Swarm unique (manager) · stack « cloud »"]
+    direction TB
+    front["<b>front</b> · 1 à 2 instances<br/>0,75 CPU · 128 Mo chacune"]
+    gateway["<b>gateway</b> · 1 à 3 instances<br/>0,30 CPU · 96 Mo chacune"]
+    vip{{"adresse virtuelle<br/>du service back"}}
+    b1["<b>back #1</b>"]
+    b2["<b>back #2</b>"]
+    bn["<b>back #3 à #6</b><br/>selon la charge"]
+    vol[("volume <b>cloud_stockage</b>")]
+    subgraph isole["réseau isole (internal)"]
+      cleaner["<b>cleaner</b> · toujours 1 instance"]
+    end
+    subgraph isoleas["réseau isole-autoscaler (internal)"]
+      autoscaler["<b>autoscaler</b> · 1 instance<br/>0,10 CPU · 64 Mo"]
+    end
+    sock[["socket Docker<br/>/var/run/docker.sock"]]
+  end
+  nav <-- ":8080 (routing mesh)" --> front
+  front <-- "interne-front" --> gateway
+  gateway <-- "interne-back" --> vip
+  vip <--> b1
+  vip <--> b2
+  vip -.-> bn
+  b1 <--> vol
+  b2 <--> vol
+  bn -.-> vol
+  cleaner <-- "suppression des expirés" --> vol
+  autoscaler <-- "docker stats<br/>docker service scale" --> sock
+  sock -. "ajoute / retire des instances<br/>(labels autoscale.*)" .-> front
+  sock -.-> gateway
+  sock -.-> bn
+
+  classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
+  classDef int fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
+  classDef data fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
+  classDef iso fill:#fdf0e2,stroke:#d9771a,color:#1b2330
+  classDef ctl fill:#fde8e8,stroke:#c0392b,color:#1b2330
+  class front pub
+  class gateway,vip,b1,b2,bn int
+  class vol data
+  class cleaner iso
+  class autoscaler,sock ctl
+</pre>
+  </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--pub);border-color:var(--pub-b)"></i><b>Public</b></span>
+    <span><i class="sw" style="background:var(--int);border-color:var(--int-b)"></i><b>Interne</b> (overlay <code>internal</code>)</span>
+    <span><i class="sw" style="background:var(--data);border-color:var(--data-b)"></i><b>Données</b></span>
+    <span><i class="sw" style="background:var(--iso);border-color:var(--iso-b)"></i><b>Isolé</b> (réseau sans autre membre)</span>
+    <span><i class="sw" style="background:var(--ctl);border-color:var(--ctl-b)"></i><b>Pilotage</b> (moteur Docker)</span>
+    <span><i class="ln"></i>échange permanent</span>
+    <span><i class="ln dot"></i>variable : instances ajoutées sous charge, ou action par le socket</span>
+  </div>
+
+  <table>
+    <tr><th>Règle de l'autoscaler</th><th>Valeur</th><th>Pourquoi</th></tr>
+    <tr><td>Monter (+1)</td><td>CPU moyen &gt; 70 % de la limite, ou mémoire &gt; 80 %, 3 relevés de suite</td><td>Une instance met 10 à 15 s à être prête : on anticipe pour rester sous 80 %</td></tr>
+    <tr><td>Descendre (−1)</td><td>CPU &lt; 25 % et mémoire &lt; 50 %, 6 relevés</td><td>Hystérésis : sinon le service oscillerait</td></tr>
+    <tr><td>Bornes</td><td>back 2–6 · gateway 1–3 · front 1–2 · cleaner 1</td><td>Au-delà, aucun gain mesuré ; 2 back pour la disponibilité</td></tr>
+    <tr><td>Budget machine</td><td>Somme des limites ≤ 80 % du CPU et de la RAM de l'hôte</td><td>La consigne « jamais plus de 80 % », appliquée à toute la stack</td></tr>
+    <tr><td>Socket Docker</td><td>Seul montage, non-root, lecture seule, aucun réseau</td><td>Le socket vaut un accès root : risque assumé et réduit</td></tr>
+  </table>
+</section>
+
+<!-- ===================== PAGE 8 : RESULTATS ===================== -->
+<section class="page">
+  <h2>Résultats mesurés et Docker face aux VM <span class="crit">Objectif pédagogique</span></h2>
+
+  <h3>Ce qui a été vérifié</h3>
+  <table>
+    <tr><th>Test</th><th>Résultat</th></tr>
+    <tr><td>Démarrage <code>docker compose up -d --build --wait</code></td><td>4 services <i>healthy</i>, ordre back → gateway / cleaner → front</td></tr>
+    <tr><td>Réseau : qui peut joindre qui</td><td>Front → back <b>bloqué</b> ; back et gateway sans Internet ; cleaner sans interface réseau</td></tr>
+    <tr><td>Cycle de vie d'un fichier (durée 1 min)</td><td><code>200</code> → expiré : <code>410</code> → après la passe du cleaner : supprimé, <code>404</code></td></tr>
+    <tr><td>Charge (5 000 requêtes, 50 en parallèle)</td><td>Compose : 166 req/s · Swarm 3 back : 431 à 574 req/s · <span class="ok">0 échec</span></td></tr>
+    <tr><td>Autoscaling (3 min de charge)</td><td>back 2 → 3 en 41 s, gateway 1 → 2 en 92 s ; retour aux minimums 72 s après ; <span class="ok">0 échec</span> sur 94 000 requêtes</td></tr>
+    <tr><td>Budget machine abaissé à 30 %</td><td>Montées refusées et journalisées</td></tr>
+    <tr><td>Auto-réparation (instance tuée)</td><td>Recréée en 13 s, <span class="ok">0 erreur</span> sur 179 requêtes</td></tr>
+    <tr><td>Mise à jour progressive</td><td><span class="ok">0 erreur</span> sur 520 requêtes</td></tr>
+    <tr><td>Arrêt de chaque service</td><td>Moins d'1 s, code <span class="ok">0</span></td></tr>
+  </table>
+
+  <h3>Docker face aux machines virtuelles (mesuré sur cette stack)</h3>
+  <table>
+    <tr><th></th><th>Machines virtuelles</th><th>Conteneurs Docker</th></tr>
+    <tr><td>Ajouter une instance</td><td>Une VM complète : minutes, plusieurs Go</td><td>2 instances de plus en 17 s, ~27 Mo de RAM chacune</td></tr>
+    <tr><td>Instance en panne</td><td>Intervention ou outillage dédié</td><td>Relancée seule en 13 s</td></tr>
+    <tr><td>Mise à jour</td><td>Arrêt de service ou bascule manuelle</td><td>Remplacement progressif, 0 erreur</td></tr>
+    <tr><td>Empreinte</td><td>Un OS complet par VM</td><td>~100 Mo de RAM au repos pour toute l'application</td></tr>
+    <tr><td>Configuration</td><td>À reproduire sur chaque VM</td><td>Identique partout : même image, même <code>.env</code></td></tr>
+  </table>
+
+  <h3>Limites connues</h3>
+  <table>
+    <tr><td>Un seul nœud Swarm</td><td>Plusieurs machines demanderaient un registre (<code>registry:2</code> vient du Hub) et un stockage partagé</td></tr>
+    <tr><td>Rafale d'envois</td><td>20 envois de 40 Mo : front à 99 % de sa mémoire ; la rafale (~15 s) est plus rapide que l'autoscaler (~40 s)</td></tr>
+  </table>
+  <footer>Détail des mesures, des tests et de chaque choix : <code>README.md</code> du dépôt · github.com/AbadieThomasPro/M2_TP_Docker</footer>
+</section>
+
+<script type="module">
+  // Schémas dessinés un par un, avec nouvel essai en cas d'échec : imprimé par Edge headless, le schéma
+  // de séquence échouait une fois sur deux ("Syntax error", code du diagramme chargé à la demande)
+  // alors que le même texte est valide (vérifié avec mermaid.parse)
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: false, suppressErrorRendering: true, theme: 'default', flowchart: { htmlLabels: true }, sequence: { mirrorActors: false } });
+  const pause = ms => new Promise(r => setTimeout(r, ms));
+  let failed = 0;
+  for (const [i, pre] of [...document.querySelectorAll('pre.mermaid')].entries()) {
+    // innerHTML et non textContent : les <b> et <br/> des libellés sont des balises pour le navigateur,
+    // textContent les supprimerait ; seules les entités (&gt; des flèches) sont à remettre en caractères
+    const text = pre.innerHTML.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+    let ok = false;
+    for (let attempt = 1; attempt <= 5 && !ok; attempt++) {
+      try {
+        const { svg } = await mermaid.render(`schema-${i}-${attempt}`, text);
+        pre.outerHTML = svg;
+        ok = true;
+      } catch (e) { await pause(300); }
+    }
+    if (!ok) failed++;
+  }
+  document.body.dataset.ready = failed === 0 ? '1' : '0';
+</script>
+</body>
+</html>

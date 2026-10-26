@@ -2,7 +2,9 @@
 
 Mise en place d'une architecture virtualisée basée sur Docker : 4 images personnalisées (front, serveur web / gateway, back, worker de nettoyage) orchestrées avec Docker Compose, plus une 5e image, l'**autoscaler**, pour le mode Docker Swarm.
 
-Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
+Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`, image de base autorisée par l'enseignant) et tout le reste est installé et configuré par nos soins.
+
+> **Documentation du rendu (PDF, 8 pages)** : [docs/documentation-docker-cloud.pdf](docs/documentation-docker-cloud.pdf). Synthèse des choix en tableaux, organisée selon le barème, avec les schémas légendés. Ce README en donne le détail et les mesures.
 
 ## Sujet : cloud de fichiers éphémères
 
@@ -263,6 +265,8 @@ Chaque service attend que le précédent soit `healthy` (`depends_on: condition:
 │   ├── Dockerfile           # alpine + docker-cli, utilisateur non-root du groupe du socket
 │   └── autoscale.sh         # ajoute / retire des instances selon le CPU et la mémoire mesurés
 ├── docs/
+│   ├── documentation-docker-cloud.pdf  # documentation du rendu (8 pages, tableaux et schémas légendés)
+│   ├── documentation/       # source du PDF (HTML + Mermaid) et generer-pdf.ps1 (Edge headless)
 │   ├── architecture.png     # export image du schéma d'architecture (Mermaid)
 │   ├── architecture-swarm.png  # export image du schéma d'architecture en mode Swarm
 │   └── interface.png        # capture de l'interface
