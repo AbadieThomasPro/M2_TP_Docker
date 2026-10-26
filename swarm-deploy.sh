@@ -18,12 +18,17 @@ if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
   exit 1
 fi
 
-docker compose build
-
-# set -a : chaque variable lue dans le .env est exportée, donc visible par docker stack deploy
+# set -a : chaque variable lue dans le .env est exportée, donc visible par docker stack deploy.
+# Chargé avant les builds : l'image de l'autoscaler en a besoin pour ses arguments
 set -a
 . ./.env
 set +a
+
+docker compose build
+
+# L'autoscaler n'existe qu'en Swarm (le compose n'a pas d'instances à piloter) : docker compose build
+# ne le connaît pas, on le construit à part, avec les mêmes valeurs du .env
+docker build -t docker-cloud/autoscaler --build-arg ALPINE_VERSION="$ALPINE_VERSION" --build-arg DOCKER_GID="$DOCKER_GID" ./Autoscaler
 
 docker stack deploy -c docker-stack.yml cloud
 docker stack services cloud
