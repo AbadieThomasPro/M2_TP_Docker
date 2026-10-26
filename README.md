@@ -97,6 +97,19 @@ L'outil de charge du dossier `Bench/` (image alpine + `ab`) rejoue nos mesures. 
 
 Pas à pas, résultats attendus, test du compose, garde-fous (plafond, budget de 80 %, auto-réparation) : [docs/tester-la-charge.md](docs/tester-la-charge.md).
 
+## CI/CD
+
+Un pipeline vérifie le projet puis le déploie ; **chaque étape est un conteneur**, et le premier échec arrête tout (rien n'est déployé) :
+
+```bash
+./ci/pipeline.sh                     # Windows : powershell -ExecutionPolicy Bypass -File ci/pipeline.ps1
+./ci/pipeline.sh --sans-deploiement  # CI seule (Windows : -SansDeploiement)
+```
+
+build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests de bout en bout sur une stack isolée → déploiement Swarm progressif (retour arrière automatique si la nouvelle version n'est pas healthy). ~2 min 30, rapports dans `ci/reports/`.
+
+Étapes, règles, résultats mesurés et défauts trouvés par la CI : [docs/ci-cd.md](docs/ci-cd.md).
+
 ## Structure du projet
 
 ```
@@ -107,6 +120,7 @@ Pas à pas, résultats attendus, test du compose, garde-fous (plafond, budget de
 ├── Cleaner/             # image worker : suppression des fichiers expirés (shell BusyBox)
 ├── Autoscaler/          # image Swarm : ajuste le nombre d'instances selon CPU et mémoire
 ├── Bench/               # outil de charge (alpine + ab) et scripts de test (démo de l'autoscaling, mesures)
+├── ci/                  # CI/CD : une image par étape, pipeline.sh/.ps1, deploy.sh/.ps1, tests d'intégration
 ├── docs/                # documentation détaillée, PDF du rendu, schémas
 ├── docker-compose.yml   # orchestration principale
 ├── docker-stack.yml     # déploiement Swarm (instances multiples, autoscaler)
@@ -128,4 +142,5 @@ Pas à pas, résultats attendus, test du compose, garde-fous (plafond, budget de
 | [Benchmark](docs/benchmark.md) | Mesures qui justifient les limites CPU et mémoire |
 | [Scalabilité](docs/scalabilite.md) | Swarm, autoscaling, Docker face aux VM |
 | [Tester la charge](docs/tester-la-charge.md) | Rejouer les mesures : démo de l'autoscaling, garde-fous, résultats attendus |
+| [CI/CD](docs/ci-cd.md) | Pipeline en conteneurs (lint, tests, sécurité, intégration), déploiement Swarm progressif |
 | [Tests](docs/tests.md) | Récapitulatif des vérifications |

@@ -21,6 +21,7 @@ Le détail, partie par partie :
 | [Benchmark](benchmark.md) | Comment les limites CPU et mémoire ont été mesurées et choisies | Ressources expliquées |
 | [Scalabilité](scalabilite.md) | Docker Swarm, autoscaling mesuré, Docker face aux VM | – |
 | [Tester la charge](tester-la-charge.md) | Rejouer les mesures avec l'outil `Bench/` : démo de l'autoscaling, garde-fous, résultats attendus | Ressources · Scalabilité |
+| [CI/CD](ci-cd.md) | Pipeline en conteneurs (lint, tests, sécurité, politique des images, intégration), déploiement Swarm progressif avec retour arrière | – |
 | [Tests et vérifications](tests.md) | Récapitulatif des tests et des défauts corrigés | – |
 
 Sources : la synthèse PDF est générée depuis [documentation/documentation.html](documentation/documentation.html) par [documentation/generer-pdf.ps1](documentation/generer-pdf.ps1).
