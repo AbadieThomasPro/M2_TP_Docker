@@ -109,7 +109,59 @@ services:
       test:
         condition: service_completed_successfully
 
+  # Étape 2 OPTIONNELLE (profil "ia", option --ia du pipeline) : un agent Claude écrit des tests de
+  # l'API à partir de la spécification, puis le script les relance lui-même (lui seul décide)
+  ai-test:
+    <<: *etape
+    build:
+      context: ./ai-test
+      # Même principe que l'étape test : seuls package.json et package-lock.json du back sont copiés
+      additional_contexts:
+        back: ../Backend
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+    image: docker-cloud-ci/ai-test
+    # Hors du pipeline normal : il reste gratuit et sans jeton, l'étape ne tourne qu'à la demande
+    profiles: ["ia"]
+    # Jeton lu au run seulement, depuis un fichier ignoré par git, jamais copié dans l'image.
+    # required: false : sans fichier, le compose reste valide et l'étape s'arrête d'elle-même en code 2
+    env_file:
+      - path: ia.env
+        required: false
+    environment:
+      CI_IA_MODEL: ${CI_IA_MODEL}
+      CI_IA_MAX_TURNS: ${CI_IA_MAX_TURNS}
+      CI_IA_BUDGET_USD: ${CI_IA_BUDGET_USD}
+    # Limites propres : Claude Code (binaire natif) et les serveurs testés pèsent plus que les autres étapes
+    deploy:
+      resources:
+        limits:
+          cpus: "${CI_CPUS}"
+          memory: ${CI_IA_MEMORY}
+    memswap_limit: ${CI_IA_MEMORY}
+    working_dir: /workspace
+    # Réseau par défaut : l'agent appelle l'API Claude. Aucun réseau de l'application : le serveur
+    # testé est lancé en local dans le conteneur
+    # Seulement ce dont l'agent a besoin, en lecture seule : la spécification (docs, README, .env sans
+    # secret) et le back à tester. Le reste du dépôt (dont ci/ia.env, qui contient le jeton) n'existe pas
+    # dans le conteneur. Un fichier vide monté sur ci/ia.env bloquait docker cp (constaté)
+    volumes:
+      - ../docs:/workspace/docs:ro
+      - ../README.md:/workspace/README.md:ro
+      - ../.env:/workspace/.env:ro
+      - ../Backend:/workspace/Backend:ro
+      - reports:/reports
+      # Seul dossier où l'agent peut écrire : ses tests, copiés ensuite pour relecture humaine
+      - ai-tests:/tests
+    depends_on:
+      lint:
+        condition: service_completed_successfully
+      test:
+        condition: service_completed_successfully
+
 volumes:
   # Rapports des étapes, l'équivalent des « artefacts » d'un serveur de CI ; copiés ensuite dans
   # ci/reports/ par le script de pipeline
   reports:
+  # Tests écrits par l'agent : des artefacts eux aussi, à relire avant de les adopter
+  ai-tests:

@@ -1,0 +1,8 @@
+# Contexte de build réduit au strict nécessaire : le script de l'agent et ses dépendances figées.
+# Le jeton (ci/ia.env) est hors de ce dossier : il n'entre jamais dans un contexte de build
+**/node_modules
+*.md
+*.log
+*.env
+Dockerfile
+.dockerignore

@@ -26,15 +26,15 @@ function freePort() {
 }
 
 // Démarre l'API sur un dossier de stockage temporaire ; petites limites pour tester les refus
-// sans envoyer de gros fichiers (1 Mo par envoi, 2 Mo au total)
-async function startServer() {
+// sans envoyer de gros fichiers (1 Mo par envoi, 2 Mo au total). overrides : une valeur undefined
+// retire la variable, pour tester les valeurs par défaut du serveur
+async function startServer(overrides = {}) {
   const port = await freePort();
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'cloud-test-'));
   const storage = path.join(dir, 'files');
-  const proc = spawn(process.execPath, [SERVER], {
-    env: { ...process.env, PORT: String(port), STORAGE_DIR: storage, MAX_UPLOAD_MB: '1', STORAGE_QUOTA_MB: '2', TTL_DEFAULT_H: '24', TTL_MAX_H: '168' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  const env = { ...process.env, PORT: String(port), STORAGE_DIR: storage, MAX_UPLOAD_MB: '1', STORAGE_QUOTA_MB: '2', TTL_DEFAULT_H: '24', TTL_MAX_H: '168', ...overrides };
+  for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
+  const proc = spawn(process.execPath, [SERVER], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const base = `http://127.0.0.1:${port}`;
   // Attente bornée (5 s) : un serveur qui ne démarre pas fait échouer le test au lieu de le bloquer
   for (let i = 0; i < 50; i++) {
@@ -124,6 +124,16 @@ test('fichier plus gros que MAX_UPLOAD_MB : 413, et la liste ne change pas', asy
   const res = await upload(srv.base, Buffer.alloc(1024 * 1024 + 1), 'gros.bin');
   assert.equal(res.status, 413);
   assert.equal((await list(srv.base)).length, before);
+});
+
+test('MAX_UPLOAD_MB absent : limite par défaut de 10 Mo, comme la documentation', async () => {
+  // Écart trouvé par l'étape ai-test de la CI (le serveur retombait sur 50 Mo) : test conservé à la main
+  const own = await startServer({ MAX_UPLOAD_MB: undefined, STORAGE_QUOTA_MB: undefined });
+  try {
+    assert.equal((await upload(own.base, Buffer.alloc(10 * 1024 * 1024 + 1), 'defaut.bin')).status, 413);
+  } finally {
+    await stopServer(own);
+  }
 });
 
 test('quota de stockage atteint : 507', async () => {

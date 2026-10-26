@@ -24,7 +24,7 @@ done < "$LIST"
 
 say ""
 say "== node --check : syntaxe JavaScript (hors application Angular, compilée par son image) =="
-lister -name '*.js'
+lister \( -name '*.js' -o -name '*.mjs' \)
 while IFS= read -r f; do
   if out=$(node --check "$f" 2>&1); then say "OK      $f"; else say "ERREUR  $f"; say "$out"; rc=1; fi
 done < "$LIST"
@@ -65,6 +65,31 @@ while IFS= read -r f; do
     }' "$f")
   if [ -z "$errs" ]; then say "OK      $f"; else say "ERREUR  $f"; say "$errs"; rc=1; fi
 done < "$LIST"
+
+say ""
+say "== Secrets : aucun jeton Anthropic réel dans le dépôt =="
+# Jetons d'abonnement (sk-ant-oat…), clés d'API et d'administration (sk-ant-api…, sk-ant-admin…) suivis
+# d'au moins 20 caractères : la forme d'un vrai jeton, pas une simple mention du préfixe dans la doc.
+# Exclus : ci/ia.env (le SEUL endroit prévu pour le jeton, ignoré par git), les rapports et .git.
+# La fausse clé de l'exemple (FAUX-JETON) est admise. Seul le NOM du fichier est affiché, jamais le jeton
+SECRET='sk-ant-(oat|api|admin)[0-9]{2}-[A-Za-z0-9_-]{20,}'
+# find + grep -l plutôt que grep -r --exclude-dir : le grep de BusyBox ne connaît pas --exclude-dir, et
+# la recherche échouait EN SILENCE (aucun fichier trouvé, contrôle toujours vert : constaté)
+if ! find . \( -name .git -o -name node_modules -o -path ./ci/reports -o -path ./ci/ia.env \) -prune \
+     -o -type f -exec grep -lE "$SECRET" {} + > "$LIST.brut" 2> /tmp/erreurs-secrets; then
+  # grep -l rend 1 quand un lot de fichiers ne contient rien : seule une vraie erreur doit compter
+  if [ -s /tmp/erreurs-secrets ]; then say "ERREUR  recherche de secrets impossible :"; say "$(cat /tmp/erreurs-secrets)"; rc=1; fi
+fi
+sort "$LIST.brut" > "$LIST"
+found=0
+while IFS= read -r f; do
+  if grep -oE "$SECRET" "$f" | grep -qv 'FAUX-JETON'; then
+    say "ERREUR  $f : jeton Anthropic réel détecté (le retirer, puis le révoquer : il est compromis)"
+    found=1
+    rc=1
+  fi
+done < "$LIST"
+[ "$found" -eq 0 ] && say "OK      aucun jeton réel (ci/ia.env exclu : seul emplacement prévu, ignoré par git)"
 
 say ""
 if [ "$rc" -eq 0 ]; then say "Lint : tout est conforme"; else say "Lint : ÉCHEC (voir les ERREUR ci-dessus)"; fi
