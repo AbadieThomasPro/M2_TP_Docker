@@ -12,7 +12,7 @@ LOAD_S=${1:-180}
 CONC=${2:-50}
 REST_S=${3:-300}
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 if [ -z "$(docker service ls -q --filter name=cloud_autoscaler)" ]; then
   echo "Stack Swarm introuvable : la déployer d'abord avec ./swarm-deploy.sh"

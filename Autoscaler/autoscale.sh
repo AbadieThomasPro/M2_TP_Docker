@@ -78,6 +78,8 @@ svc_metrics() {
 # protègent d'une instance qui s'emballe, pas d'une multiplication d'instances : c'est ce contrôle-là
 # qui garantit que la machine ne dépasse jamais 80 %. Renvoie "cpu% mem% accepté(0/1)"
 host_budget() {
+  # Découpage voulu : un identifiant de service par argument (les identifiants n'ont jamais d'espace)
+  # shellcheck disable=SC2046
   docker service inspect $(docker service ls -q) --format \
     '{{.Spec.TaskTemplate.Resources.Limits.NanoCPUs}} {{.Spec.TaskTemplate.Resources.Limits.MemoryBytes}} {{if .Spec.Mode.Replicated}}{{.Spec.Mode.Replicated.Replicas}}{{else}}1{{end}}' 2>/dev/null |
   awk -v addc="$1" -v addm="$2" -v ncpu="$HOST_CPUS" -v hmem="$HOST_MEM" -v pct="$HOST_BUDGET" '

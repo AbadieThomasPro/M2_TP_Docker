@@ -1,0 +1,115 @@
+# Pipeline de CI : chaque étape est un conteneur ponctuel, qui réussit s'il sort avec le code 0.
+#
+#   lint ──┐                ┌── security ──┐
+#          ├─ (tous verts) ─┤              ├─ (tous verts) ─► intégration, puis déploiement (ci/pipeline.*)
+#   test ──┘                └── policy ────┘
+#
+# Lancé depuis la racine du dépôt, avec le .env du projet (une seule source de valeurs) :
+#   docker compose -f ci/compose.yml --env-file .env up --abort-on-container-failure
+#   docker compose -f ci/compose.yml --env-file .env run --rm lint      (une seule étape)
+# Les chemins ci-dessous sont relatifs à ce dossier ci/ ; ".." est la racine du dépôt.
+
+# Projet distinct de l'application ("docker-cloud") : la CI ne touche ni ses conteneurs ni son volume
+name: docker-cloud-ci
+
+# Réglages communs à toutes les étapes, repris par ancre YAML plutôt que copiés 4 fois
+x-etape: &etape
+  # Une étape de CI s'exécute une fois : jamais relancée, contrairement à un service
+  restart: "no"
+  # Système de fichiers de l'image en lecture seule, comme les services de l'application ;
+  # une étape n'écrit que dans /tmp (en RAM, limité) et dans le volume de rapports
+  read_only: true
+  tmpfs:
+    - /tmp:size=${CI_TMPFS_SIZE}
+  deploy:
+    resources:
+      limits:
+        cpus: "${CI_CPUS}"
+        memory: ${CI_MEMORY}
+  memswap_limit: ${CI_MEMORY}
+
+# Code du dépôt monté en LECTURE SEULE : une étape ne peut pas modifier ce qu'elle vérifie
+x-code: &code ..:/workspace:ro
+
+services:
+  # Étape 1 (en parallèle avec test) : scripts shell, JavaScript, règles des Dockerfile
+  lint:
+    <<: *etape
+    build:
+      context: ./lint
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+    image: docker-cloud-ci/lint
+    # Aucun réseau : l'étape ne lit que des fichiers locaux
+    network_mode: none
+    volumes:
+      - *code
+      - reports:/reports
+
+  # Étape 1 (en parallèle avec lint) : tests de l'API du back
+  test:
+    <<: *etape
+    build:
+      context: ./test
+      # Contexte supplémentaire : seuls package.json et package-lock.json du back sont copiés dans l'image
+      # (le contexte principal reste ci/test, sans tout le dépôt)
+      additional_contexts:
+        back: ../Backend
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+    image: docker-cloud-ci/test
+    # Les tests démarrent l'API sur 127.0.0.1 : la boucle locale suffit, aucun réseau nécessaire
+    network_mode: none
+    working_dir: /workspace/Backend
+    volumes:
+      - *code
+      - reports:/reports
+
+  # Étape 2 (après lint ET test, en parallèle avec policy) : failles connues des dépendances npm
+  security:
+    <<: *etape
+    build:
+      context: ./security
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+    image: docker-cloud-ci/security
+    environment:
+      AUDIT_LEVEL: ${CI_AUDIT_LEVEL}
+    # Réseau par défaut (et non "none") : npm audit interroge la base de failles du registre npm
+    volumes:
+      - *code
+      - reports:/reports
+    # Porte du pipeline (« fan-in ») : ne démarre que si les DEUX étapes précédentes sont sorties en 0
+    depends_on:
+      lint:
+        condition: service_completed_successfully
+      test:
+        condition: service_completed_successfully
+
+  # Étape 2 (après lint ET test, en parallèle avec security) : règles vérifiées sur les images construites
+  policy:
+    <<: *etape
+    build:
+      context: ./policy
+      args:
+        ALPINE_VERSION: ${ALPINE_VERSION}
+        DOCKER_GID: ${DOCKER_GID}
+    image: docker-cloud-ci/policy
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+    # Le socket est le seul accès dont l'étape a besoin (inspecter les images) : pas de réseau.
+    # Même risque assumé que l'autoscaler (accès au moteur), même réduction : non-root, lecture seule
+    network_mode: none
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - reports:/reports
+    depends_on:
+      lint:
+        condition: service_completed_successfully
+      test:
+        condition: service_completed_successfully
+
+volumes:
+  # Rapports des étapes, l'équivalent des « artefacts » d'un serveur de CI ; copiés ensuite dans
+  # ci/reports/ par le script de pipeline
+  reports:
