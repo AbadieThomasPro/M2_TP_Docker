@@ -8,15 +8,15 @@ La démarche s'est faite en **deux temps** : un premier dimensionnement sur la v
 
 ## Outil de mesure
 
-> L'outil de mesure est resté **local** : le dossier `Bench/` n'est pas versionné (`.gitignore`), et le service `bench` est **gardé en commentaire** dans `docker-compose.yml`. Il ne fait pas partie de l'application livrée, mais la démarche et les résultats ci-dessous restent valables.
+> L'outil est livré dans le dépôt (`Bench/`) pour que les mesures soient rejouables : mode d'emploi pas à pas dans [tester-la-charge.md](tester-la-charge.md).
 
 | Élément | Choix |
 |---|---|
 | Image `Bench/` | Alpine + `apache2-utils` (`ab`, outil de charge HTTP). Image faite par nous, comme les autres (pas d'image de bench du Hub), non-root, `ENTRYPOINT ["ab"]` : le conteneur s'utilise comme une commande. |
-| Service `bench` dans le compose (commenté) | Dans le profil `bench` : il ne démarrait pas avec `docker compose up`, seulement à la demande. Branché sur le réseau `public` uniquement : il attaque le **front comme un vrai client**, donc la mesure couvre toute la chaîne front → gateway → back. Limité lui aussi (1 CPU) pour ne pas voler le CPU des services mesurés. |
-| Script `Bench/run-bench.ps1` | Lance chaque scénario `ab` et relève `docker stats` en parallèle pendant toute la charge, pour garder le **pic** CPU et mémoire de chaque service. |
+| Service `bench` dans le compose | Dans le profil `bench` : il ne démarre pas avec `docker compose up`, seulement à la demande. Branché sur le réseau `public` uniquement : il attaque le **front comme un vrai client**, donc la mesure couvre toute la chaîne front → gateway → back. Limité lui aussi (1 CPU) pour ne pas voler le CPU des services mesurés. |
+| Script [Bench/run-bench.ps1](../Bench/run-bench.ps1) | Lance chaque scénario `ab` et relève `docker stats` en parallèle pendant toute la charge, pour garder le **pic** CPU et mémoire de chaque service. |
 
-Pour rejouer les mesures (avec le dossier `Bench/` en local et le bloc `bench` décommenté dans le compose) :
+Pour rejouer les mesures :
 
 ```bash
 docker compose up -d --build --wait

@@ -30,7 +30,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `Autoscaler/` | alpine + docker-cli (Swarm uniquement) | 5e image : pilote le nombre d'instances des services portant les labels `autoscale.*` (CPU moyen en % de la limite, mémoire de la pire instance, hystérésis 70 / 25 %, relevés consécutifs, pauses, budget machine 80 %). Socket Docker monté, non-root (UID 1003, groupe `DOCKER_GID`), réseau `isole-autoscaler`, `read_only`. Script PID 1, SIGTERM → code `0`. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
-| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **local, non versionné** (`.gitignore`). Service `bench` **commenté** dans le compose : le décommenter pour mesurer. `run-bench.ps1` (compose), `run-swarm-bench.ps1` (Swarm, CPU en % de la limite), `run-autoscale-demo.ps1` (démo de l'autoscaler). |
+| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **versionné** (rejouable par le prof, voir `docs/tester-la-charge.md`). Service `bench` du compose dans le profil `bench` (ne démarre pas avec `up`). `run-autoscale-demo.sh` / `.ps1` (démo de l'autoscaler, tous systèmes), `run-bench.ps1` (compose), `run-swarm-bench.ps1` (Swarm, CPU en % de la limite). |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
@@ -42,8 +42,8 @@ docker compose ps                     # état / santé / ports
 docker compose logs -f <service>
 docker compose down                   # arrêt propre ; -v supprime aussi les volumes
 docker compose run --rm gateway nginx -t -c /tmp/nginx.conf   # tester la config nginx générée
-# Bench : décommenter d'abord le service bench du compose (dossier Bench/ local)
 powershell -ExecutionPolicy Bypass -File Bench/run-bench.ps1    # benchmark (stack démarrée)
+./Bench/run-autoscale-demo.sh                                   # démo de l'autoscaling (stack Swarm déployée)
 docker compose --profile bench run --rm bench -n 5000 -c 50 http://front/api/files    # un scénario ab
 ```
 

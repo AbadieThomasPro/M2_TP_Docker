@@ -20,6 +20,7 @@ Le détail, partie par partie :
 | [Orchestration](orchestration.md) | Compose : arguments, ressources, ordre de démarrage, SIGTERM, volume, réseaux | Compose · Ressources · SIGTERM · Dépendances |
 | [Benchmark](benchmark.md) | Comment les limites CPU et mémoire ont été mesurées et choisies | Ressources expliquées |
 | [Scalabilité](scalabilite.md) | Docker Swarm, autoscaling mesuré, Docker face aux VM | – |
+| [Tester la charge](tester-la-charge.md) | Rejouer les mesures avec l'outil `Bench/` : démo de l'autoscaling, garde-fous, résultats attendus | Ressources · Scalabilité |
 | [Tests et vérifications](tests.md) | Récapitulatif des tests et des défauts corrigés | – |
 
 Sources : la synthèse PDF est générée depuis [documentation/documentation.html](documentation/documentation.html) par [documentation/generer-pdf.ps1](documentation/generer-pdf.ps1).

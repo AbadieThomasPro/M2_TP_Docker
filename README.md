@@ -85,6 +85,18 @@ Le compose et la stack Swarm publient tous deux le port 8080 : lancer l'un **ou*
 
 Fonctionnement, mesures et seuils de l'autoscaling : [docs/scalabilite.md](docs/scalabilite.md).
 
+## Tester la montée en charge
+
+L'outil de charge du dossier `Bench/` (image alpine + `ab`) rejoue nos mesures. Avec la stack Swarm déployée :
+
+```bash
+./Bench/run-autoscale-demo.sh      # Windows : powershell -ExecutionPolicy Bypass -File Bench/run-autoscale-demo.ps1
+```
+
+3 minutes de charge puis 5 de repos : le nombre d'instances s'affiche toutes les 10 s (back 2 → 3, gateway 1 → 2, puis retour aux minimums), suivi du résultat (0 échec attendu) et des décisions de l'autoscaler.
+
+Pas à pas, résultats attendus, test du compose, garde-fous (plafond, budget de 80 %, auto-réparation) : [docs/tester-la-charge.md](docs/tester-la-charge.md).
+
 ## Structure du projet
 
 ```
@@ -94,6 +106,7 @@ Fonctionnement, mesures et seuils de l'autoscaling : [docs/scalabilite.md](docs/
 ├── Backend/             # image back : API Express (envoi, liste, téléchargement, suppression)
 ├── Cleaner/             # image worker : suppression des fichiers expirés (shell BusyBox)
 ├── Autoscaler/          # image Swarm : ajuste le nombre d'instances selon CPU et mémoire
+├── Bench/               # outil de charge (alpine + ab) et scripts de test (démo de l'autoscaling, mesures)
 ├── docs/                # documentation détaillée, PDF du rendu, schémas
 ├── docker-compose.yml   # orchestration principale
 ├── docker-stack.yml     # déploiement Swarm (instances multiples, autoscaler)
@@ -114,4 +127,5 @@ Fonctionnement, mesures et seuils de l'autoscaling : [docs/scalabilite.md](docs/
 | [Orchestration](docs/orchestration.md) | Compose : ressources, ordre de démarrage, SIGTERM, volume, réseaux |
 | [Benchmark](docs/benchmark.md) | Mesures qui justifient les limites CPU et mémoire |
 | [Scalabilité](docs/scalabilite.md) | Swarm, autoscaling, Docker face aux VM |
+| [Tester la charge](docs/tester-la-charge.md) | Rejouer les mesures : démo de l'autoscaling, garde-fous, résultats attendus |
 | [Tests](docs/tests.md) | Récapitulatif des vérifications |
