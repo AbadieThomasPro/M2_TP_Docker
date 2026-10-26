@@ -5,3 +5,5 @@ dist/
 .angular/
 # Logs locaux
 *.log
+# Rapports de la CI (lint, JUnit, audit, policy) : régénérés à chaque exécution du pipeline
+ci/reports/

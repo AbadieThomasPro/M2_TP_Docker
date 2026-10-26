@@ -83,7 +83,16 @@ function relayToGateway(req, res) {
     { host: GATEWAY_HOST, port: GATEWAY_PORT, path: req.url, method: req.method, headers: withoutHopByHop(req.headers) },
     (gatewayRes) => {
       // Node choisit lui-même le découpage adapté au client (chunked en HTTP/1.1, fermeture en HTTP/1.0)
-      res.writeHead(gatewayRes.statusCode, withoutHopByHop(gatewayRes.headers));
+      try {
+        res.writeHead(gatewayRes.statusCode, withoutHopByHop(gatewayRes.headers));
+      } catch (err) {
+        // En-tête refusé par Node (caractère interdit) : 502 pour CETTE requête. Sans ce garde-fou,
+        // l'exception arrêtait tout le front, et coupait les requêtes de tous les autres clients
+        console.error(`Réponse de la gateway non relayable : ${err.message}`);
+        gatewayRes.resume();
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ error: 'Réponse invalide de la gateway' }));
+      }
       gatewayRes.pipe(res);
       // La gateway peut répondre avant la fin de l'envoi (ex. 413 fichier trop gros) :
       // on lit le reste du corps sans le transmettre, sinon le client reste bloqué

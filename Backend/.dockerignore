@@ -6,6 +6,8 @@
 # Bruit qui n'a rien à faire dans une image
 **/*.log
 .git
+# Tests : exécutés par l'étape de CI (sources montées en lecture seule), jamais livrés dans l'image
+test/
 # Fichiers de build eux-mêmes : inutiles une fois l'image construite
 Dockerfile
 .dockerignore

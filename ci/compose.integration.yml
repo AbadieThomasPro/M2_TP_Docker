@@ -1,0 +1,69 @@
+# Étape d'intégration de la CI : la VRAIE stack (docker-compose.yml) démarrée à part, puis testée de
+# bout en bout par un conteneur client. Surcharge appliquée par-dessus le compose principal :
+#
+#   docker compose -p docker-cloud-it -f docker-compose.yml -f ci/compose.integration.yml --env-file .env up -d --wait
+#   docker compose -p docker-cloud-it -f docker-compose.yml -f ci/compose.integration.yml --env-file .env run --rm integration
+#   docker compose -p docker-cloud-it -f docker-compose.yml -f ci/compose.integration.yml --env-file .env down -v
+#
+# Projet distinct (-p docker-cloud-it) : conteneurs, réseaux et volume à part, la stack de l'utilisateur
+# et ses fichiers ne sont jamais touchés. Chemins relatifs à la racine du dépôt (dossier du 1er fichier).
+
+services:
+  front:
+    # Aucun port publié : le test passe par le réseau interne, et le 8080 reste libre pour la stack réelle
+    ports: !reset []
+
+  gateway:
+    environment:
+      # 1 Mo au lieu de 50 : le refus 413 de la gateway se teste sans envoyer 50 Mo
+      MAX_UPLOAD_MB: 1
+
+  back:
+    environment:
+      MAX_UPLOAD_MB: 1
+
+  cleaner:
+    environment:
+      # Une passe toutes les 5 s au lieu de 60 : le test vérifie la suppression sans attendre une minute
+      CLEANUP_INTERVAL_S: 5
+
+  # Client de test : même image que l'étape test (Node 22, tests node:test), tests montés en lecture seule
+  integration:
+    image: docker-cloud-ci/test
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=${CI_TMPFS_SIZE}
+    working_dir: /workspace/ci/test/integration
+    environment:
+      BASE_URL: http://front:${FRONT_PORT}
+      STORAGE_DIR: ${STORAGE_DIR}
+      CLEANUP_INTERVAL_S: 5
+    # Membre du groupe "stockage" : le test dépose un fichier déjà expiré dans le volume, comme s'il avait
+    # dépassé sa durée de vie, pour vérifier que le cleaner le supprime
+    group_add:
+      - "${STORAGE_GID}"
+    volumes:
+      - .:/workspace:ro
+      - stockage:/data
+      - reports:/reports
+    # Réseau public seulement, comme un vrai navigateur : il ne doit joindre que le front
+    networks:
+      - public
+    depends_on:
+      front:
+        condition: service_healthy
+      cleaner:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${CI_CPUS}"
+          memory: ${CI_MEMORY}
+    memswap_limit: ${CI_MEMORY}
+    command: ["node", "--test", "--test-reporter=spec", "--test-reporter-destination=stdout", "--test-reporter=junit", "--test-reporter-destination=/reports/junit-integration.xml"]
+    # Le client ne fait pas partie de la stack : il ne démarre pas avec "up", seulement avec "run"
+    profiles: ["integration"]
+
+volumes:
+  reports:

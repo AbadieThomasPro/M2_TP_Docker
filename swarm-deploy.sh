@@ -19,9 +19,10 @@ if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
 fi
 
 # set -a : chaque variable lue dans le .env est exportée, donc visible par docker stack deploy.
-# Chargé avant les builds : l'image de l'autoscaler en a besoin pour ses arguments
+# Chargé avant les builds : l'image de l'autoscaler en a besoin pour ses arguments.
+# Fins de ligne Windows retirées : un .env en CRLF donnerait des valeurs terminées par \r (services cassés)
 set -a
-. ./.env
+eval "$(tr -d '\r' < .env)"
 set +a
 
 docker compose build

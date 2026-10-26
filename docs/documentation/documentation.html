@@ -429,6 +429,7 @@ flowchart TB
     <tr><td>Un seul nœud Swarm</td><td>Plusieurs machines demanderaient un registre (<code>registry:2</code> vient du Hub) et un stockage partagé</td></tr>
     <tr><td>Rafale d'envois</td><td>20 envois de 40 Mo : front à 99 % de sa mémoire ; la rafale (~15 s) est plus rapide que l'autoscaler (~40 s)</td></tr>
   </table>
+  <p class="note"><b>CI/CD</b> : <code>ci/pipeline.sh</code> (ou <code>.ps1</code>), chaque étape dans son conteneur alpine : build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests de bout en bout sur une stack isolée → déploiement Swarm progressif avec retour arrière automatique. Pipeline complet : 153 s ; 0 échec sur 86 332 requêtes pendant le déploiement (détail : <code>docs/ci-cd.md</code>).</p>
   <p class="note"><b>Rejouer les tests</b> : outil de charge <code>Bench/</code> (alpine + <code>ab</code>) ; démonstration de l'autoscaling en une commande : <code>./Bench/run-autoscale-demo.sh</code> (mode d'emploi : <code>docs/tester-la-charge.md</code>).</p>
   <footer>Détail des mesures, des tests et de chaque choix : dossier <code>docs/</code> du dépôt · github.com/AbadieThomasPro/M2_TP_Docker</footer>
 </section>

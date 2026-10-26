@@ -119,6 +119,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
   - `1` ❌ : l'application s'est arrêtée sur une erreur ;
   - `137` ❌ (128 + 9 = SIGKILL) : le signal d'arrêt a été ignoré, Docker a tué le conteneur au bout des 10 s.
 - Nettoyage : `docker compose down` + suppression des images de test.
+- **Pipeline complet** : `powershell -ExecutionPolicy Bypass -File ci/pipeline.ps1 -SansDeploiement` doit être vert (ou sans l'option pour déployer sur Swarm).
 
 ## Fichiers hors dépôt
 
@@ -161,12 +162,22 @@ docker swarm leave --force   # quitte le mode Swarm : tous les services et toute
 - Plus doux, si la machine répond encore : `docker stack rm cloud` (retire la stack, garde le mode Swarm) ou `docker service scale cloud_back=1`.
 - Pendant les démonstrations de montée en charge, surveiller `docker stats` et garder la main sur ces commandes. Ne jamais dépasser les plafonds du `.env` (`BACK_MAX_REPLICAS_PER_NODE`).
 
+## CI/CD (`ci/`, détail : `docs/ci-cd.md`)
+
+- **Une étape = une image alpine** (`ci/{lint,test,security,policy}`), mêmes règles que l'application : non-root, `read_only`, code monté en `:ro`, limites (`CI_*` du `.env`, pics mesurés), `restart: "no"`, `network_mode: none` sauf `security` (registre npm). Aucune image d'outil du Hub (pas de hadolint : les règles des Dockerfile sont dans `ci/lint/lint.sh`).
+- Enchaînement par `depends_on: condition: service_completed_successfully` dans `ci/compose.yml` (projet `docker-cloud-ci`) : `lint` ∥ `test`, puis `security` ∥ `policy`. Intégration sur une stack isolée (`-p docker-cloud-it`, `ci/compose.integration.yml`, aucun port publié). Déploiement : `ci/deploy.*` (tag = hash git).
+- **Le code de sortie est le contrat** : toute étape qui échoue arrête le pipeline, rien n'est déployé. Ne jamais contourner une étape rouge (pas de `|| true`, pas de seuil d'audit relevé pour « faire passer ») : corriger la cause.
+- Toute nouvelle règle du projet vérifiable automatiquement va dans `lint.sh` (Dockerfile) ou `policy.sh` (images construites). Tout nouveau script `.sh` doit passer shellcheck (niveau warning).
+- Tests : `Backend/test/` (unitaires, `node --test`, aucune dépendance) et `ci/test/integration/` (bout en bout). Exclus des images livrées.
+- Les scripts nettoient toujours (`trap` / `finally`) : 0 conteneur, volume ou réseau `docker-cloud-ci` / `docker-cloud-it` après une exécution, réussie ou non.
+
 ## Pièges connus (poste Windows)
 - PowerShell 5.1 lit les scripts `.ps1` en ANSI : éviter les remplacements de texte accentué par script. Pour modifier des fichiers, utiliser l'outil d'édition, ou Node.
 - En PowerShell, `@(@("a","b"))` est aplati en `@("a","b")` : attention aux tableaux de paires.
 - **Jamais de boucle `docker stats` en tâche de fond (`Start-Job`) dans un script de test** : interrompues, elles continuent de tourner (580 processus PowerShell, machine figée, redémarrage nécessaire). Une seule boucle, bornée en nombre de tours, dans le processus du script.
 - `powershell -File script.ps1 -Param 10,20` passe **la chaîne** `10,20` (lue comme 1020 pour un `[int[]]`) : lancer une valeur par appel. Tests de charge : toujours un nombre de processus plafonné et vérifier ensuite qu'aucun `curl` / `docker` ne reste.
 - `sed` et `git` ne sont pas disponibles dans le Bash de l'agent : utiliser PowerShell pour git.
+- **Ne pas tester les `.sh` de déploiement depuis Git Bash** : MSYS convertit les variables qui ressemblent à des chemins (`STORAGE_DIR=/data/files`) en chemins Windows avant d'appeler `docker.exe`, les services reçoivent des réglages faux. Sous Windows : les `.ps1`. Pour valider un `.sh` : le lancer dans un conteneur Linux (image `docker-cloud-ci/policy` : `sh` + `docker-cli`, socket monté). Le `.env` extrait en CRLF est géré par les scripts (`tr -d '\r'`).
 - **Disque C: plein** sur le poste : npm échoue (`ENOSPC`) car son cache et ses fichiers temporaires sont sur C:. Lancer npm via `cmd` avec le cache et `TEMP` sur D: : `cmd /c "set TEMP=D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache\tmp&& set TMP=...&& cd Frontend\app && npm install --cache D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache"`.
 - Application Angular : `Frontend/app/` (Angular 22). Dev : `npx ng serve` (proxy `/api` → `127.0.0.1:8080`, la stack doit tourner).
 - Les `.sh` doivent rester en fins de ligne LF (`.gitattributes`), sinon ils ne s'exécutent pas dans le conteneur.
