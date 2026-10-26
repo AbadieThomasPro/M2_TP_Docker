@@ -5,7 +5,8 @@
   "description": "API du mini cloud de stockage : envoi, liste, téléchargement et suppression de fichiers",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
