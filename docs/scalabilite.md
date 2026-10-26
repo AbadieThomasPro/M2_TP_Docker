@@ -2,7 +2,7 @@
 
 [← Retour au README](../README.md) · [Documentation](README.md)
 
-La montée en charge se fait avec **Docker Swarm**, l'orchestrateur natif de Docker : plusieurs instances, réparties automatiquement, relancées si elles tombent, mises à jour sans coupure, et dont le nombre suit la charge grâce à notre [autoscaler](images/autoscaler.md#image-autoscaler-mode-swarm).
+La montée en charge se fait avec **Docker Swarm**, l'orchestrateur natif de Docker : plusieurs instances, réparties automatiquement, relancées si elles tombent, mises à jour sans coupure, et dont le nombre suit la charge grâce à notre [autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm).
 
 ## Déploiement
 
@@ -42,7 +42,7 @@ Un fichier de **surcharge** (compose + petit fichier de différences) a été es
 |---|---|
 | `replicas` au minimum (back 2, gateway 1, front 1) | Point de départ : l'autoscaler ajoute des instances selon la charge. Back à 2 au minimum : un crash ne coupe pas l'API. Swarm donne à chaque service une **adresse virtuelle** et répartit les connexions entre ses instances : ni la gateway ni le front n'ont rien à connaître. |
 | `deploy.labels` `autoscale.*` sur back, gateway, front | Les services que l'autoscaler peut multiplier, et leurs bornes (back 2 à 6, gateway 1 à 3, front 1 à 2). |
-| Service `autoscaler` | 1 instance sur le manager, socket Docker monté (voir [Image Autoscaler](images/autoscaler.md#image-autoscaler-mode-swarm)). |
+| Service `autoscaler` | 1 instance sur le manager, socket Docker monté (voir [Image Autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm)). |
 | `cleaner.deploy.replicas: 1` | **Toujours un seul** worker, quel que soit le nombre de back : plusieurs supprimeraient les mêmes fichiers en même temps. |
 | `restart_policy: on-failure` | Auto-réparation : une instance qui tombe est recréée. |
 | `update_config: parallelism 1, order start-first, failure_action rollback` | Mise à jour progressive : une instance à la fois, la nouvelle doit être `healthy` avant l'arrêt de l'ancienne, retour arrière automatique en cas d'échec. |
@@ -100,7 +100,7 @@ Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : e
 
 ## Autoscaling : le nombre d'instances suit la charge
 
-Objectif : ajouter des instances **avant** qu'un service sature, les retirer quand la charge retombe, avec deux règles : **ne jamais dépasser 80 % du CPU** alloué à un service ni de la machine, et ne jamais approcher la **limite mémoire** (OOM : conteneur tué par le noyau). Le service qui le fait est notre [image Autoscaler](images/autoscaler.md#image-autoscaler-mode-swarm).
+Objectif : ajouter des instances **avant** qu'un service sature, les retirer quand la charge retombe, avec deux règles : **ne jamais dépasser 80 % du CPU** alloué à un service ni de la machine, et ne jamais approcher la **limite mémoire** (OOM : conteneur tué par le noyau). Le service qui le fait est notre [image Autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm).
 
 ### Benchmark de dimensionnement
 
@@ -205,7 +205,7 @@ cloud_back : 3 -> 2 instance(s) (cpu 0 %, mem 21 % sous les seuils 25 % / 50 % s
 ## Limites assumées
 
 - **Un seul nœud.** Plusieurs machines demanderaient un registre d'images partagé (l'image `registry:2` vient du Docker Hub, interdite par le sujet) et un stockage partagé entre machines (un volume local n'existe que sur sa machine ; il faudrait NFS ou équivalent).
-- **Pas d'auto-scaling natif dans Swarm**, comme le précise le cours : il est fait par notre [autoscaler](images/autoscaler.md#image-autoscaler-mode-swarm), au prix d'un accès au socket Docker (risque assumé et réduit, voir sa partie Sécurité).
+- **Pas d'auto-scaling natif dans Swarm**, comme le précise le cours : il est fait par notre [autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm), au prix d'un accès au socket Docker (risque assumé et réduit, voir sa partie Sécurité).
 - **Swap non désactivable** en Swarm (`memswap_limit` refusé).
 - Les instances arrêtées restent visibles quelques minutes (`docker ps -a`) : c'est l'historique des tâches de Swarm.
 

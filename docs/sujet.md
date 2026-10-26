@@ -14,7 +14,7 @@ Un service de partage de **fichiers temporaires**, sur le modèle de WeTransfer,
 
 ## L'interface
 
-![Interface du cloud de fichiers éphémères](interface.png)
+![Interface du cloud de fichiers éphémères](images/interface.png)
 
 « **Parchemins éphémères** » : application **Angular 22** d'une seule page, au design **QuestUI** (thème RPG médiéval, voir [questui-DESIGN.md](../questui-DESIGN.md)) : les fichiers sont des parchemins qui se consument.
 
@@ -28,7 +28,7 @@ Un service de partage de **fichiers temporaires**, sur le modèle de WeTransfer,
 
 L'application reste volontairement minimale (cours Docker, pas cours web) : un composant, un service d'accès à l'API, et du CSS natif bâti sur des variables (aucune librairie UI). Toutes les couleurs, polices, espacements et ombres sont définis **une seule fois** dans `styles.css`, d'après le design system. Les polices sont chargées par le navigateur depuis Google Fonts : rien n'est ajouté dans les images Docker. Le build de production pèse **150 Ko** (45 Ko compressés).
 
-L'application est compilée **dans l'image Docker du front** (build multi-stage, voir [Image Frontend](images/frontend.md#image-frontend)) : `docker compose up --build` suffit, aucune installation de Node n'est nécessaire sur la machine. En développement uniquement : `npx ng serve` dans `Frontend/app/`, qui relaie `/api` vers la stack (`proxy.conf.json`).
+L'application est compilée **dans l'image Docker du front** (build multi-stage, voir [Image Frontend](conteneurs/frontend.md#image-frontend)) : `docker compose up --build` suffit, aucune installation de Node n'est nécessaire sur la machine. En développement uniquement : `npx ng serve` dans `Frontend/app/`, qui relaie `/api` vers la stack (`proxy.conf.json`).
 
 ## Ce que le sujet permet de montrer avec Docker
 

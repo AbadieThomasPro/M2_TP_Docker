@@ -91,7 +91,7 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 | `cleaner` (au repos) | 0,38 s | `0` ✅ |
 | `cleaner` (pendant une passe sur 10 000 fichiers) | 0,5 à 0,6 s | `0` ✅ |
 
-Le cas du cleaner est détaillé dans [sa section](images/cleaner.md#entrypoint-et-gestion-de-sigterm) : c'est le service pour lequel l'arrêt propre a demandé le plus de travail.
+Le cas du cleaner est détaillé dans [sa section](conteneurs/cleaner.md#entrypoint-et-gestion-de-sigterm) : c'est le service pour lequel l'arrêt propre a demandé le plus de travail.
 
 `restart: unless-stopped` relance automatiquement un conteneur qui plante, sauf s'il a été arrêté volontairement.
 
@@ -139,7 +139,7 @@ Un service qui a besoin d'écrire reçoit seulement ce qu'il lui faut :
 | `cleaner` | Le volume `/data` + `tmpfs` **`/tmp`** de 1 Mo | Suppressions dans le volume, fichier de heartbeat pour le healthcheck. |
 | `bench` | Nulle part | `ab` n'écrit rien. |
 
-**Pourquoi des `tmpfs` si petits ?** Un `tmpfs` est stocké en RAM et **compté dans la limite mémoire** du conteneur (48 Mo pour la gateway). Le limiter évite qu'un remplissage de `/tmp` consomme toute la mémoire du service. C'est aussi ce qui a imposé de ne laisser nginx bufferiser **ni les envois** (`proxy_request_buffering off`) **ni les téléchargements** (`proxy_max_temp_file_size 0`) sur disque : sans ce second réglage, un téléchargement de 40 Mo était coupé à 7 Mo (voir [Image Gateway](images/gateway.md#envois-de-fichiers-et-scaling)).
+**Pourquoi des `tmpfs` si petits ?** Un `tmpfs` est stocké en RAM et **compté dans la limite mémoire** du conteneur (48 Mo pour la gateway). Le limiter évite qu'un remplissage de `/tmp` consomme toute la mémoire du service. C'est aussi ce qui a imposé de ne laisser nginx bufferiser **ni les envois** (`proxy_request_buffering off`) **ni les téléchargements** (`proxy_max_temp_file_size 0`) sur disque : sans ce second réglage, un téléchargement de 40 Mo était coupé à 7 Mo (voir [Image Gateway](conteneurs/gateway.md#envois-de-fichiers-et-scaling)).
 
 **Vérifications :**
 

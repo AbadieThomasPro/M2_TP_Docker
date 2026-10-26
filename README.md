@@ -6,7 +6,7 @@ Un **cloud de fichiers éphémères** (sur le modèle de WeTransfer) construit a
 - Orchestration avec **Docker Compose**, et en option **Docker Swarm** avec autoscaling.
 - **Documentation du rendu (PDF, 8 pages)** : [docs/documentation-docker-cloud.pdf](docs/documentation-docker-cloud.pdf). Le détail de chaque choix est dans [docs/](docs/README.md).
 
-![Interface du cloud de fichiers éphémères](docs/interface.png)
+![Interface du cloud de fichiers éphémères](docs/images/interface.png)
 
 ---
 
@@ -65,7 +65,7 @@ Détail de toutes les variables et de leur passage dans les images : [docs/confi
 
 ## Architecture
 
-![Architecture : front (seul publié) → gateway → back → volume, cleaner sans réseau](docs/architecture.png)
+![Architecture : front (seul publié) → gateway → back → volume, cleaner sans réseau](docs/images/architecture.png)
 
 Le navigateur ne parle qu'au **front**, seul service publié. La **gateway** est le seul chemin vers le **back**, qui écrit dans le volume `stockage`. Le **cleaner**, sans aucun réseau, supprime les fichiers expirés dans ce même volume. Schémas détaillés et légendés : [docs/architecture.md](docs/architecture.md).
 
@@ -110,7 +110,7 @@ Fonctionnement, mesures et seuils de l'autoscaling : [docs/scalabilite.md](docs/
 | [Sujet](docs/sujet.md) | Fonctionnalités, interface, notions Docker montrées, avancement |
 | [Architecture](docs/architecture.md) | Schémas : architecture, communications, cycle de vie d'un fichier, démarrage |
 | [Configuration](docs/configuration.md) | ARG, ENV et `.env` |
-| [Images](docs/images/points-communs.md) | [Frontend](docs/images/frontend.md) · [Gateway](docs/images/gateway.md) · [Backend](docs/images/backend.md) · [Cleaner](docs/images/cleaner.md) · [Autoscaler](docs/images/autoscaler.md) : dépendances, manipulations OS, arguments, entrypoints |
+| [Images](docs/conteneurs/points-communs.md) | [Frontend](docs/conteneurs/frontend.md) · [Gateway](docs/conteneurs/gateway.md) · [Backend](docs/conteneurs/backend.md) · [Cleaner](docs/conteneurs/cleaner.md) · [Autoscaler](docs/conteneurs/autoscaler.md) : dépendances, manipulations OS, arguments, entrypoints |
 | [Orchestration](docs/orchestration.md) | Compose : ressources, ordre de démarrage, SIGTERM, volume, réseaux |
 | [Benchmark](docs/benchmark.md) | Mesures qui justifient les limites CPU et mémoire |
 | [Scalabilité](docs/scalabilite.md) | Swarm, autoscaling, Docker face aux VM |

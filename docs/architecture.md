@@ -53,13 +53,13 @@ flowchart TB
 
 ### Le même schéma en mode Swarm
 
-![Architecture en mode Swarm : front, gateway et back en nombre variable, adresse virtuelle du back, cleaner isolé, autoscaler relié au socket Docker, volume cloud_stockage](architecture-swarm.png)
+![Architecture en mode Swarm : front, gateway et back en nombre variable, adresse virtuelle du back, cleaner isolé, autoscaler relié au socket Docker, volume cloud_stockage](images/architecture-swarm.png)
 
 Mêmes services, mêmes réseaux et même volume : seuls le **nombre d'instances** et la façon de les joindre changent, et un 5e service, l'autoscaler, ajuste ce nombre. Source Mermaid et détail dans la partie [Scalabilité](scalabilite.md#architecture-en-mode-swarm).
 
 | Élément | Ce que montre le schéma |
 |---|---|
-| Services | Nombre d'instances **variable**, piloté par l'[autoscaler](images/autoscaler.md#image-autoscaler-mode-swarm) : back **2 à 6**, gateway **1 à 3**, front **1 à 2**. Le cleaner reste **toujours à 1** : deux workers supprimeraient les mêmes fichiers. |
+| Services | Nombre d'instances **variable**, piloté par l'[autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm) : back **2 à 6**, gateway **1 à 3**, front **1 à 2**. Le cleaner reste **toujours à 1** : deux workers supprimeraient les mêmes fichiers. |
 | Autoscaler | 1 instance sur le manager ; il agit **par le socket Docker** (en pointillés), jamais par le réseau : son réseau `isole-autoscaler` n'a aucun autre membre. |
 | Port | `8080` publié par le **routing mesh** de Swarm : l'hôte reçoit la connexion et la transmet au front. |
 | Réseaux | `interne-front` (front, gateway) et `interne-back` (gateway, back) comme dans le compose. Le cleaner est sur `isole` (`internal: true`) : Swarm n'accepte pas `network_mode: none`, ce réseau sans sortie le remplace. |
