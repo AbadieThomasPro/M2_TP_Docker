@@ -129,7 +129,8 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 | `../features/02-app-cloud-stockage.md` | Plan de l'application, découpé en lots (sur la branche dédiée) |
 | `../features/Compte rendu/` | Comptes rendus de séance (`compte-rendu-seance-N.md`) |
 | `../../Cours-1-Docker.html`, `../../Note_Docker.txt` | Cours de référence pour vérifier les bonnes pratiques |
-| `../Activité 2 séances.pdf`, `TP - Docker Cloud (1).pdf` | Consignes de la séance et sujet du TP |
+| `../Activité 2 séances.pdf` | Consignes de la séance |
+| `TP - Docker Cloud-V2.pdf` (dans le dépôt) | **Sujet et barème en vigueur** : consigne supplémentaire (au moins 2 conteneurs parmi scaling, lint, tests) et barème repondéré. `TP - Docker Cloud-V1.pdf` : version d'origine, gardée pour référence |
 
 ## Swarm
 
