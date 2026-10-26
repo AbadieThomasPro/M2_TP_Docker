@@ -8,10 +8,14 @@
 # (docker stack deploy ne lit pas le .env lui-même).
 # Les images sont construites par "docker compose build" : Swarm ignore build et utilise des images existantes.
 # L'autoscaler, propre au mode Swarm, est construit à part par le même script.
+#
+# IMAGE_TAG : version déployée. "latest" par défaut (swarm-deploy) ; le déploiement continu (ci/deploy.*)
+# passe le hash git du commit testé : un tag qui change force la mise à jour progressive des services,
+# et la version en service reste lisible dans "docker service ls"
 
 services:
   back:
-    image: docker-cloud/back
+    image: docker-cloud/back:${IMAGE_TAG:-latest}
     environment:
       PORT: ${BACK_PORT}
       NODE_OPTIONS: --max-old-space-size=${BACK_NODE_MAX_MEMORY}
@@ -58,15 +62,18 @@ services:
         condition: on-failure
         delay: 2s
       # Mise à jour progressive : une tâche à la fois, la nouvelle doit être healthy avant l'arrêt
-      # de l'ancienne (start-first), donc aucune coupure ; retour arrière automatique en cas d'échec
+      # de l'ancienne (start-first), donc aucune coupure ; retour arrière automatique en cas d'échec.
+      # monitor 30 s : Swarm surveille chaque nouvelle tâche le temps que son healthcheck puisse
+      # échouer (3 essais toutes les 10 s) ; une version qui tombe dans ce délai est annulée
       update_config:
         parallelism: 1
         delay: 10s
         order: start-first
         failure_action: rollback
+        monitor: 30s
 
   cleaner:
-    image: docker-cloud/cleaner
+    image: docker-cloud/cleaner:${IMAGE_TAG:-latest}
     environment:
       STORAGE_DIR: ${STORAGE_DIR}
       CLEANUP_INTERVAL_S: ${CLEANUP_INTERVAL_S}
@@ -97,9 +104,15 @@ services:
       restart_policy:
         condition: on-failure
         delay: 2s
+      # stop-first (et non start-first) : l'ancien worker s'arrête avant que le nouveau démarre,
+      # il n'y en a jamais deux à la fois. Retour arrière si la nouvelle version ne tient pas
+      update_config:
+        order: stop-first
+        failure_action: rollback
+        monitor: 30s
 
   gateway:
-    image: docker-cloud/gateway
+    image: docker-cloud/gateway:${IMAGE_TAG:-latest}
     environment:
       PORT: ${GATEWAY_PORT}
       WORKER_PROCESSES: ${GATEWAY_WORKER_PROCESSES}
@@ -142,9 +155,10 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+        monitor: 30s
 
   front:
-    image: docker-cloud/front
+    image: docker-cloud/front:${IMAGE_TAG:-latest}
     environment:
       PORT: ${FRONT_PORT}
       NODE_OPTIONS: --max-old-space-size=${FRONT_NODE_MAX_MEMORY}
@@ -180,10 +194,11 @@ services:
       update_config:
         order: start-first
         failure_action: rollback
+        monitor: 30s
 
   # Swarm n'a pas d'autoscaling : ce service ajoute ou retire des instances selon le CPU et la mémoire
   autoscaler:
-    image: docker-cloud/autoscaler
+    image: docker-cloud/autoscaler:${IMAGE_TAG:-latest}
     # Seuils et délais : valeurs justifiées dans le .env (section Autoscaling)
     environment:
       AUTOSCALE_INTERVAL_S: ${AUTOSCALE_INTERVAL_S}
@@ -231,6 +246,11 @@ services:
       restart_policy:
         condition: on-failure
         delay: 10s
+      # stop-first : jamais deux autoscalers en même temps (décisions contradictoires)
+      update_config:
+        order: stop-first
+        failure_action: rollback
+        monitor: 30s
 
 # Mêmes réseaux que le compose, en "overlay" : le type de réseau de Swarm, qui peut s'étendre sur
 # plusieurs machines. Les réseaux internes restent sans accès extérieur
