@@ -94,6 +94,11 @@ test('cycle complet : envoi, liste, téléchargement, suppression', async () => 
   const dl = await fetch(`${srv.base}/api/files/${encodeURIComponent(body.name)}`);
   assert.equal(dl.status, 200);
   assert.equal(await dl.text(), 'bonjour');
+  // En-tête 100 % ASCII, nom exact en UTF-8 dans filename* (des accents bruts faisaient planter le front)
+  const disposition = dl.headers.get('content-disposition');
+  assert.match(disposition, /^[\x20-\x7e]+$/);
+  assert.match(disposition, /filename="ete 2026\.txt"/);
+  assert.match(disposition, /filename\*=UTF-8''%C3%A9t%C3%A9%202026\.txt/);
 
   const del = await fetch(`${srv.base}/api/files/${encodeURIComponent(body.name)}`, { method: 'DELETE' });
   assert.equal(del.status, 204);

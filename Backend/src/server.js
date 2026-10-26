@@ -128,6 +128,15 @@ app.post('/api/files', upload.single('file'), async (req, res) => {
   res.status(201).json({ name, originalName: original, size: req.file.size, expiresAt: new Date(expiresAt * 1000) });
 });
 
+// En-tête de téléchargement 100 % ASCII (RFC 6266) : nom sans accents pour les vieux clients, et nom
+// exact encodé en UTF-8 dans filename*. res.download envoyait les accents en octets bruts (« é » en
+// Latin-1), refusés par le relais Node du front, qui s'arrêtait entièrement (trouvé par la CI)
+function attachmentHeader(name) {
+  const ascii = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\x20-\x7e]|["\\]/g, '_');
+  const utf8 = encodeURIComponent(name).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${utf8}`;
+}
+
 // Téléchargement, sous son nom d'origine ; 410 si le fichier a expiré
 app.get('/api/files/:name', async (req, res) => {
   const file = storedPath(req.params.name);
@@ -135,7 +144,8 @@ app.get('/api/files/:name', async (req, res) => {
   if (!file || !info || !fs.existsSync(file)) return res.status(404).json({ error: 'Fichier introuvable' });
   // Le worker passe toutes les N secondes : entre-temps, un fichier expiré ne doit plus être servi
   if (isExpired(info)) return res.status(410).json({ error: 'Fichier expiré' });
-  res.download(file, info.originalName);
+  res.setHeader('Content-Disposition', attachmentHeader(info.originalName));
+  res.sendFile(file);
 });
 
 // Suppression (possible même si le fichier a expiré)
