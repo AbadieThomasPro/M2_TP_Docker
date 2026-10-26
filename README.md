@@ -1,6 +1,6 @@
 # M2 TP Docker - Docker Cloud
 
-Mise en place d'une architecture virtualisée basée sur Docker : 4 images personnalisées (front, serveur web / gateway, back, worker de nettoyage) orchestrées avec Docker Compose.
+Mise en place d'une architecture virtualisée basée sur Docker : 4 images personnalisées (front, serveur web / gateway, back, worker de nettoyage) orchestrées avec Docker Compose, plus une 5e image, l'**autoscaler**, pour le mode Docker Swarm.
 
 Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : chaque image part d'un OS minimal (`alpine`) et tout le reste est installé et configuré par nos soins.
 
@@ -44,7 +44,7 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 | Isolation réseau | Seul le front est publié. La gateway et le back restent sur deux réseaux internes séparés : le front ne peut joindre le back qu'à travers la gateway. |
 | Arguments au run | Durée de vie par défaut et maximale, quota de stockage, taille max d'envoi : réglables dans le `.env`, sans rebuild. |
 | Limitation des ressources | CPU et mémoire par conteneur, dimensionnés par un benchmark, plus une taille max d'envoi et un quota de stockage. |
-| Scalabilité | **Docker Swarm** : 3 instances du back (sans état : l'expiration est inscrite dans le nom des fichiers), montée en charge à chaud, auto-réparation, mise à jour sans coupure, réservations et plafond pour ne pas saturer la machine (voir [Scalabilité](#scalabilité)). |
+| Scalabilité | **Docker Swarm** : plusieurs instances du back (sans état : l'expiration est inscrite dans le nom des fichiers), auto-réparation, mise à jour sans coupure, et **autoscaling** par notre propre image : le nombre d'instances du back, de la gateway et du front suit le CPU et la mémoire mesurés, sans jamais dépasser 80 % de la machine (voir [Scalabilité](#scalabilité)). |
 
 ### Avancement
 
@@ -62,6 +62,7 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 | Benchmark sur l'application réelle, CPU redosés (back 0,65 / front 0,25 / gateway 0,10) | ✅ Fait |
 | Tests de bout en bout : cycle de vie complet d'un fichier, persistance, arrêt propre | ✅ Fait |
 | Scalabilité avec Docker Swarm : 3 back, montée en charge, auto-réparation, mise à jour sans coupure, garde-fous de ressources | ✅ Fait |
+| Autoscaling (5e image) : benchmark de dimensionnement, seuils CPU / mémoire, plafond de 80 % de la machine | ✅ Fait |
 
 ---
 
@@ -77,10 +78,11 @@ L'application est compilée **dans l'image Docker du front** (build multi-stage,
 8. [Image Gateway (serveur web)](#image-gateway-serveur-web)
 9. [Image Backend](#image-backend)
 10. [Image Cleaner (worker de nettoyage)](#image-cleaner-worker-de-nettoyage)
-11. [Orchestration (docker-compose.yml)](#orchestration-docker-composeyml)
-12. [Benchmark : comment les limites ont été choisies](#benchmark--comment-les-limites-ont-été-choisies)
-13. [Scalabilité](#scalabilité)
-14. [Tests et vérifications](#tests-et-vérifications)
+11. [Image Autoscaler (mode Swarm)](#image-autoscaler-mode-swarm)
+12. [Orchestration (docker-compose.yml)](#orchestration-docker-composeyml)
+13. [Benchmark : comment les limites ont été choisies](#benchmark--comment-les-limites-ont-été-choisies)
+14. [Scalabilité](#scalabilité)
+15. [Tests et vérifications](#tests-et-vérifications)
 
 ---
 
@@ -103,7 +105,7 @@ docker compose down -v                # idem, en supprimant aussi le volume (les
 
 Tous les réglages (versions, ports, durées de vie, quotas, CPU, mémoire) sont dans le fichier [`.env`](.env) : modifier une valeur puis relancer `docker compose up -d --build`.
 
-**Mode Swarm** (3 instances du back, montée en charge, auto-réparation) : `docker swarm init` une seule fois, puis `swarm-deploy.ps1` (Windows) ou `swarm-deploy.sh` (Linux / macOS). Détails dans [Scalabilité](#scalabilité). Arrêt d'urgence si la machine sature : `docker swarm leave --force`.
+**Mode Swarm** (plusieurs instances, autoscaling, auto-réparation) : `docker swarm init` une seule fois, puis `swarm-deploy.ps1` (Windows) ou `swarm-deploy.sh` (Linux / macOS). Détails dans [Scalabilité](#scalabilité). Arrêt d'urgence si la machine sature : `docker swarm leave --force`.
 
 > Sur certains postes Windows, `localhost:8080` peut être intercepté par WSL (`wslrelay`) : utiliser `127.0.0.1:8080`.
 
@@ -162,18 +164,19 @@ flowchart TB
 
 #### Le même schéma en mode Swarm
 
-![Architecture en mode Swarm : front, gateway, 3 instances du back derrière une adresse virtuelle, cleaner isolé, volume cloud_stockage](docs/architecture-swarm.png)
+![Architecture en mode Swarm : front, gateway et back en nombre variable, adresse virtuelle du back, cleaner isolé, autoscaler relié au socket Docker, volume cloud_stockage](docs/architecture-swarm.png)
 
-Mêmes services, mêmes réseaux et même volume : seul le **nombre d'instances** et la façon de les joindre changent. Détail et mesures dans la partie [Scalabilité](#scalabilité).
+Mêmes services, mêmes réseaux et même volume : seuls le **nombre d'instances** et la façon de les joindre changent, et un 5e service, l'autoscaler, ajuste ce nombre. Source Mermaid et détail dans la partie [Scalabilité](#architecture-en-mode-swarm).
 
 | Élément | Ce que montre le schéma |
 |---|---|
-| Services | `front`, `gateway` et `cleaner` en **1 instance** ; `back` en **3 instances** (`replicas: 3`). Le cleaner reste unique : deux workers supprimeraient les mêmes fichiers. |
+| Services | Nombre d'instances **variable**, piloté par l'[autoscaler](#image-autoscaler-mode-swarm) : back **2 à 6**, gateway **1 à 3**, front **1 à 2**. Le cleaner reste **toujours à 1** : deux workers supprimeraient les mêmes fichiers. |
+| Autoscaler | 1 instance sur le manager ; il agit **par le socket Docker** (en pointillés), jamais par le réseau : son réseau `isole-autoscaler` n'a aucun autre membre. |
 | Port | `8080` publié par le **routing mesh** de Swarm : l'hôte reçoit la connexion et la transmet au front. |
 | Réseaux | `interne-front` (front, gateway) et `interne-back` (gateway, back) comme dans le compose. Le cleaner est sur `isole` (`internal: true`) : Swarm n'accepte pas `network_mode: none`, ce réseau sans sortie le remplace. |
-| Adresse virtuelle | La gateway appelle `back` comme avant ; Swarm lui donne une **adresse virtuelle** et répartit les connexions entre les 3 instances. Aucune config nginx à changer pour ajouter une instance. |
-| Volume | `cloud_stockage` (le volume `stockage` préfixé par le nom de la stack) est partagé par les 3 back (lecture et écriture) et le cleaner (suppression). |
-| CPU | back 0,65 chacun, front 0,75 et gateway 0,30 : ils relaient le trafic de 3 back, d'où plus de CPU que dans le compose (0,25 et 0,10). |
+| Adresse virtuelle | La gateway appelle `back` comme avant ; Swarm lui donne une **adresse virtuelle** et répartit les connexions entre les instances. Aucune config nginx à changer pour ajouter une instance. |
+| Volume | `cloud_stockage` (le volume `stockage` préfixé par le nom de la stack) est partagé par toutes les instances du back (lecture et écriture) et le cleaner (suppression). |
+| Ressources | back 0,65 CPU chacun, front 0,75 et gateway 0,30 : ils relaient le trafic de plusieurs back, d'où plus de CPU que dans le compose (0,25 et 0,10). Gateway à 96 Mo (48 dans le compose) pour les envois en parallèle. |
 
 ### Schéma des communications : chemin d'une requête
 
@@ -256,16 +259,19 @@ Chaque service attend que le précédent soit `healthy` (`depends_on: condition:
 ├── Cleaner/
 │   ├── Dockerfile           # worker de nettoyage : alpine sans paquet ajouté
 │   └── cleanup.sh           # supprime les fichiers expirés et les envois abandonnés
+├── Autoscaler/              # mode Swarm uniquement
+│   ├── Dockerfile           # alpine + docker-cli, utilisateur non-root du groupe du socket
+│   └── autoscale.sh         # ajoute / retire des instances selon le CPU et la mémoire mesurés
 ├── docs/
 │   ├── architecture.png     # export image du schéma d'architecture (Mermaid)
 │   ├── architecture-swarm.png  # export image du schéma d'architecture en mode Swarm
 │   └── interface.png        # capture de l'interface
 ├── docker-compose.yml       # orchestration principale (Docker Compose)
-├── docker-stack.yml         # déploiement Swarm : 3 instances du back, mises à jour progressives
-├── swarm-deploy.ps1 / .sh   # construit les images, charge le .env, déploie la stack Swarm
+├── docker-stack.yml         # déploiement Swarm : instances multiples, autoscaler, mises à jour progressives
+├── swarm-deploy.ps1 / .sh   # charge le .env, construit les 5 images, déploie la stack Swarm
 ├── .env                     # valeurs de configuration lues par le compose
 ├── .gitattributes           # force les .sh en fins de ligne LF
-├── .gitignore               # node_modules, builds Angular, logs
+├── .gitignore               # node_modules, builds Angular, logs, outil de benchmark local (Bench/)
 ├── AGENTS.md                # règles du projet pour les agents IA (CLAUDE.md l'importe)
 ├── questui-DESIGN.md        # design system de l'interface (thème RPG médiéval)
 └── README.md
@@ -840,6 +846,120 @@ docker logs -f cleaner   # une ligne par passe : fichiers supprimés, envois aba
 
 ---
 
+## Image Autoscaler (mode Swarm)
+
+Swarm sait faire tourner plusieurs instances d'un service, mais **pas en changer le nombre seul** : sans outil, il reste celui de `replicas` ou d'un `docker service scale` tapé à la main. Les autoscalers existants sont des images du Docker Hub, interdites par le sujet. Cette 5e image est donc la nôtre : une boucle qui mesure le CPU et la mémoire des services, et appelle `docker service scale` quand un seuil est franchi.
+
+Elle n'existe qu'en **mode Swarm** (`docker-stack.yml`) : le compose n'a pas d'instances à piloter.
+
+| Ce qu'elle fait | Comment |
+|---|---|
+| Choisit les services à piloter | Ceux qui portent le label `autoscale.enabled=true`, entre leurs labels `autoscale.min` et `autoscale.max`. Aucun nom en dur ; le cleaner, sans label, n'est **jamais** multiplié. |
+| Mesure | Un seul `docker stats` par boucle pour tous les services. CPU = **moyenne** des instances, en % de la **limite** du service (lue dans le service) ; mémoire = **pire** instance. |
+| Décide | +1 instance au-dessus de 70 % de CPU ou 80 % de mémoire sur 3 relevés de suite ; −1 sous 25 % de CPU et 50 % de mémoire sur 6 relevés. Pause après chaque action. Détail et justification des seuils dans [Autoscaling](#autoscaling--le-nombre-dinstances-suit-la-charge). |
+| Protège la machine | Refuse toute instance qui ferait dépasser **80 %** du CPU ou de la mémoire de l'hôte à la somme des limites de la stack. Ramène dans ses bornes un service modifié à la main. |
+
+Point de départ : l'exemple fourni en cours (alpine + `docker-cli`, socket monté, placement sur un manager). Ses défauts sont corrigés, voir [la comparaison](#ce-qui-change-par-rapport-à-lexemple-fourni).
+
+### Image de base
+
+| Choix | Justification |
+|---|---|
+| `alpine:3.22` + `docker-cli` | Le **client** Docker suffit : il envoie les commandes au moteur de l'hôte par le socket. Le moteur n'est pas dans l'image. |
+| Script shell BusyBox plutôt qu'application | Même raisonnement que le cleaner : lire des chiffres, comparer à des seuils et lancer une commande, c'est ce que font `sh` et `awk`. Ni `bash` ni `curl`, contrairement à l'exemple : ils ne servaient à rien. |
+
+### Dépendances installées
+
+| Paquet | Rôle |
+|---|---|
+| `docker-cli` | `docker stats`, `docker service ls / inspect / scale`, `docker info`. |
+
+Image finale : **57 Mo**, presque entièrement le client Docker.
+
+### Manipulations sur l'OS
+
+| Instruction | Explication |
+|---|---|
+| `adduser -D -H -u 1003 autoscaler` | Utilisateur dédié, non-root, UID distinct du back (1001) et du cleaner (1002). |
+| Ajout au groupe du socket (ARG `DOCKER_GID`) | Parler au moteur Docker demande le droit d'écrire sur `/var/run/docker.sock`. Mesuré sur Docker Desktop : le socket appartient au **groupe 0, droits `660`**. L'utilisateur reste non-root (UID 1003) mais rejoint ce groupe en **groupe secondaire** (son groupe principal reste le sien). Sur un Linux classique, `DOCKER_GID` prend le GID du groupe `docker` de l'hôte : l'image crée alors ce groupe. |
+| `ENV DOCKER_CONFIG=/tmp/.docker` | Le client Docker veut écrire sa configuration ; le système de fichiers est en lecture seule, sauf `/tmp`. |
+| `COPY --chmod=755 autoscale.sh` | Copié en dernier, sans couche `RUN chmod`. |
+
+### Ports et réseau
+
+Aucun port, et **aucun besoin de réseau** : le socket est un fichier, pas une connexion réseau. Swarm n'accepte pas `network_mode: none` : l'autoscaler est donc branché sur son propre réseau overlay **`isole-autoscaler`** (`internal: true`), dont il est le seul membre, distinct du réseau `isole` du cleaner. Vérifié : il ne résout ni `front` ni `example.com`.
+
+### Arguments de build (ARG)
+
+| ARG | Défaut | Rôle |
+|---|---|---|
+| `ALPINE_VERSION` | `3.22` | Version de l'OS de base. |
+| `DOCKER_GID` | `0` | GID du groupe propriétaire du socket Docker (0 sur Docker Desktop, mesuré). |
+
+### Arguments attendus au run (ENV)
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `AUTOSCALE_INTERVAL_S` | `10` | Pause entre deux boucles. Une boucle prend ~14 s en tout : `docker stats` met ~4 s avec 0,10 CPU. |
+| `AUTOSCALE_CPU_UP` / `AUTOSCALE_CPU_DOWN` | `70` / `25` | Seuils CPU (% de la limite du service), pour monter / descendre. |
+| `AUTOSCALE_MEM_UP` / `AUTOSCALE_MEM_DOWN` | `80` / `50` | Seuils mémoire (% de la limite, pire instance). |
+| `AUTOSCALE_UP_SAMPLES` / `AUTOSCALE_DOWN_SAMPLES` | `3` / `6` | Relevés consécutifs nécessaires avant d'agir. |
+| `AUTOSCALE_COOLDOWN_UP_S` / `AUTOSCALE_COOLDOWN_DOWN_S` | `30` / `60` | Pause minimale après une action, avant une montée / une descente. |
+| `AUTOSCALE_HOST_BUDGET_PCT` | `80` | Part maximale du CPU et de la mémoire de la machine que la stack peut réserver en limites. |
+| `HEARTBEAT_FILE` | `/tmp/heartbeat` | Preuve de vie lue par le healthcheck. |
+
+Les bornes de chaque service ne sont pas des variables de l'autoscaler mais des **labels des services** (`deploy.labels` dans `docker-stack.yml`, valeurs `*_AUTOSCALE_MIN` / `*_AUTOSCALE_MAX` du `.env`) : chaque service déclare lui-même s'il peut être multiplié, et jusqu'où.
+
+### Healthcheck
+
+Comme le cleaner (pas de port à interroger) : chaque boucle met à jour `/tmp/heartbeat`, le healthcheck vérifie qu'il a **moins de 3 intervalles** (3 et non 2 : un relevé `docker stats` peut prendre plusieurs secondes).
+
+### Entrypoint et gestion de SIGTERM
+
+```dockerfile
+ENTRYPOINT ["/usr/local/bin/autoscale.sh"]
+```
+
+Script en PID 1, sans `tini`, avec la même structure que le cleaner : `trap` sur SIGTERM, relevé `docker stats` lancé **en arrière-plan + `wait`** (le signal est traité tout de suite au lieu d'attendre la fin du relevé), `sleep & wait` entre deux boucles. Aucune décision n'est prise à moitié : la commande `docker service scale --detach` rend la main immédiatement.
+
+Au démarrage, le script vérifie qu'il peut joindre le moteur et qu'il tourne sur un **manager** ; sinon il sort en erreur avec un message clair (et Swarm le relance 10 s plus tard), plutôt que de tourner sans rien pouvoir faire.
+
+| Mesure | Résultat |
+|---|---|
+| `docker stop` | **0,6 s, code `0`** (« arrêt propre ») |
+| Mise à jour du service (`docker service update`) | ancienne tâche : code `0` |
+
+### Ressources (mesurées)
+
+**0,10 CPU et 64 Mo**, réservation 0,05 CPU / 8 Mo. Au repos : **0,6 Mo** de mémoire. 64 Mo couvrent le client Docker pendant un relevé ; plus de CPU raccourcirait seulement le relevé, ce qui n'apporte rien avec une boucle toutes les 10 s.
+
+### Sécurité : le socket Docker
+
+Monter `/var/run/docker.sock`, c'est donner **l'équivalent d'un accès root** à la machine : qui parle au moteur peut lancer n'importe quel conteneur. C'est pourtant le seul moyen de changer le nombre d'instances depuis un conteneur. Le risque est **assumé et réduit** :
+
+| Mesure | Vérifié |
+|---|---|
+| Le socket est le **seul** montage (avec un `tmpfs` de 1 Mo) | `docker inspect` : `bind:/var/run/docker.sock`, `tmpfs:/tmp` |
+| Utilisateur non-root | `uid=1003(autoscaler)` |
+| Système de fichiers en lecture seule | `touch /etc/test` → `Read-only file system` |
+| Aucun réseau joignable | ni les autres services, ni Internet |
+| Image construite par nous, sans outil superflu | ni `bash` ni `curl` |
+| Une seule instance, sur un manager | `replicas: 1`, `node.role == manager` |
+
+Un `:ro` sur le montage du socket serait **trompeur** : il empêche de modifier le fichier, pas d'envoyer des commandes au moteur. Il n'est donc pas utilisé.
+
+### Build et run
+
+```bash
+docker build -t docker-cloud/autoscaler --build-arg DOCKER_GID=0 ./Autoscaler   # fait par swarm-deploy
+# test hors stack, sur un Swarm actif (services portant les labels autoscale.*)
+docker run -d --name autoscaler --network none --read-only --tmpfs /tmp:size=1m \
+  --cpus 0.10 --memory 64m --memory-swap 64m -v /var/run/docker.sock:/var/run/docker.sock docker-cloud/autoscaler
+docker logs -f autoscaler   # une ligne par relevé, une ligne par décision
+```
+
+---
+
 ## Orchestration (docker-compose.yml)
 
 ### Lancement
@@ -1152,17 +1272,19 @@ Le premier lancement d'`ab` restait **bloqué** après environ 500 requêtes. Le
 
 ## Scalabilité
 
-La montée en charge se fait avec **Docker Swarm**, l'orchestrateur natif de Docker : plusieurs instances du back, réparties automatiquement, relancées si elles tombent, et mises à jour sans coupure.
+La montée en charge se fait avec **Docker Swarm**, l'orchestrateur natif de Docker : plusieurs instances, réparties automatiquement, relancées si elles tombent, mises à jour sans coupure, et dont le nombre suit la charge grâce à notre [autoscaler](#image-autoscaler-mode-swarm).
 
 ### Déploiement
 
 ```bash
 docker swarm init                                            # une seule fois : la machine devient un nœud Swarm
 powershell -ExecutionPolicy Bypass -File swarm-deploy.ps1    # Windows   (ou ./swarm-deploy.sh sous Linux / macOS)
-docker stack services cloud                                  # back 3/3, cleaner 1/1, front 1/1, gateway 1/1
-docker service scale cloud_back=5                            # montée en charge à chaud
+docker stack services cloud                                  # au repos : back 2/2, gateway 1/1, front 1/1, cleaner 1/1, autoscaler 1/1
+docker service logs -f cloud_autoscaler                      # les relevés et les décisions de l'autoscaler
 docker stack rm cloud                                        # retrait de la stack (le volume est conservé)
 ```
+
+Un `docker service scale` à la main reste possible, mais l'autoscaler ramène le service dans ses bornes au relevé suivant.
 
 L'application reste sur **http://127.0.0.1:8080**. La stack Swarm et le compose publient tous les deux ce port : on utilise l'un **ou** l'autre.
 
@@ -1188,12 +1310,16 @@ Un fichier de **surcharge** (compose + petit fichier de différences) a été es
 
 | Réglage (`docker-stack.yml`) | Rôle |
 |---|---|
-| `back.deploy.replicas: 3` | 3 instances du back, le service le plus coûteux (voir [Benchmark](#benchmark--comment-les-limites-ont-été-choisies)). Swarm donne au service `back` une **adresse virtuelle** et répartit les connexions entre les instances : la gateway n'a rien à connaître. |
+| `replicas` au minimum (back 2, gateway 1, front 1) | Point de départ : l'autoscaler ajoute des instances selon la charge. Back à 2 au minimum : un crash ne coupe pas l'API. Swarm donne à chaque service une **adresse virtuelle** et répartit les connexions entre ses instances : ni la gateway ni le front n'ont rien à connaître. |
+| `deploy.labels` `autoscale.*` sur back, gateway, front | Les services que l'autoscaler peut multiplier, et leurs bornes (back 2 à 6, gateway 1 à 3, front 1 à 2). |
+| Service `autoscaler` | 1 instance sur le manager, socket Docker monté (voir [Image Autoscaler](#image-autoscaler-mode-swarm)). |
 | `cleaner.deploy.replicas: 1` | **Toujours un seul** worker, quel que soit le nombre de back : plusieurs supprimeraient les mêmes fichiers en même temps. |
 | `restart_policy: on-failure` | Auto-réparation : une instance qui tombe est recréée. |
 | `update_config: parallelism 1, order start-first, failure_action rollback` | Mise à jour progressive : une instance à la fois, la nouvelle doit être `healthy` avant l'arrêt de l'ancienne, retour arrière automatique en cas d'échec. |
 | Réseaux `driver: overlay` | Le type de réseau de Swarm, qui peut s'étendre sur plusieurs machines. Les mêmes réseaux que le compose (`public`, `interne-front`, `interne-back`), plus `isole`. |
-| Front et gateway à **0,75 et 0,30 CPU** (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) | Plus que dans le compose (0,25 et 0,10), parce qu'ils relaient le trafic de 3 back : voir le benchmark ci-dessous. |
+| Front et gateway à **0,75 et 0,30 CPU** (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) | Plus que dans le compose (0,25 et 0,10), parce qu'ils relaient le trafic de plusieurs back : voir le benchmark ci-dessous. |
+| Gateway à **96 Mo** (`SWARM_GATEWAY_MEMORY`, 48 dans le compose) | Mesuré à 98 % de 48 Mo pour 10 envois de 40 Mo en parallèle, et `502` à 20. Avec 96 Mo : 61 % à 10 envois, 72 % à 20, plus aucun `502`. Toujours moins que Node (128 Mo). |
+| Réseau `isole-autoscaler` | Réseau interne de l'autoscaler seul : il ne joint personne (le socket n'est pas du réseau). |
 
 ### Conditions pour que la réplication fonctionne
 
@@ -1207,12 +1333,13 @@ Un fichier de **surcharge** (compose + petit fichier de différences) a été es
 
 ### Ressources : limites, réservations et plafond
 
-Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : elles protègent d'une instance qui s'emballe, mais **pas d'une multiplication des instances** (5 back × 0,65 CPU = 3,25 CPU). Swarm n'a pas d'auto-scaling natif (le nombre d'instances ne change que sur commande), mais une commande excessive ou un outil externe pourrait saturer la machine. Deux garde-fous sont donc ajoutés :
+Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : elles protègent d'une instance qui s'emballe, mais **pas d'une multiplication des instances** (5 back × 0,65 CPU = 3,25 CPU). Une commande excessive, ou un autoscaler mal réglé, pourrait saturer la machine. Trois garde-fous sont donc en place :
 
 | Garde-fou | Réglage | Test |
 |---|---|---|
 | **Réservations CPU et mémoire** | `reservations.cpus` : back 0,30, front 0,10, gateway et cleaner 0,05 (la stack de base réserve ~1,1 CPU sur les 12 de la machine) | Le planificateur ne place une instance que si les ressources réservées sont disponibles. Test volontairement excessif, 5 CPU réservés par instance du back : la 3e reste **`Pending`** (« no suitable node (insufficient resources) »), l'ancienne instance continue de tourner (`start-first`), l'application répond toujours `200`. |
 | **Plafond par machine** | `placement.max_replicas_per_node: 6` (`BACK_MAX_REPLICAS_PER_NODE`) : au pire 3,9 CPU et 768 Mo, environ un tiers de la machine | 9 instances demandées : **6 tournent, les autres restent `Pending`** (« no suitable node (max replicas per node) »). |
+| **Budget de l'autoscaler** | Somme des limites de toutes les instances ≤ **80 %** du CPU et de la mémoire de la machine (`AUTOSCALE_HOST_BUDGET_PCT`), vérifiée avant chaque ajout | Budget abaissé à 30 % pour le test : 3 montées **refusées** et journalisées (« la stack dépasserait 30 % de la machine (cpu 35 % après ajout) »). |
 
 ### Démonstrations (mesurées)
 
@@ -1241,10 +1368,114 @@ Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : e
 
 **Ajouter des instances du back ne suffit pas.** Avec 3 ou 5 back mais un front et une gateway au dosage du compose, le débit ne bouge pas : le goulot s'est simplement déplacé vers le front et la gateway. En leur donnant du CPU dans le rapport de coûts mesuré (back / front / gateway ≈ 7 / 3 / 1), le débit est multiplié par **2,8 à 3,7** par rapport au compose. Dans la stack par défaut, les trois services arrivent ensemble près de leur limite (pics : back 68 %, front 68 %, gateway 31 %) : le dosage est équilibré.
 
+### Autoscaling : le nombre d'instances suit la charge
+
+Objectif : ajouter des instances **avant** qu'un service sature, les retirer quand la charge retombe, avec deux règles : **ne jamais dépasser 80 % du CPU** alloué à un service ni de la machine, et ne jamais approcher la **limite mémoire** (OOM : conteneur tué par le noyau). Le service qui le fait est notre [image Autoscaler](#image-autoscaler-mode-swarm).
+
+#### Benchmark de dimensionnement
+
+Avant de fixer des seuils, il fallait savoir **ce que tient une instance** de chaque service. Mesure en Swarm, `ab` en service ponctuel sur le réseau `public` (4 000 requêtes de liste par scénario, 1 / 2 / 3 / 5 back × 10 / 25 / 50 / 100 requêtes en parallèle : **64 000 requêtes, 0 échec**), CPU exprimé en % de la **limite** du service.
+
+| Back | Req/s (selon la concurrence) | CPU back | CPU gateway | CPU front |
+|---|---|---|---|---|
+| 1 | 139 à 155 | **102 à 107 %** | 35 à 51 % | 28 à 74 % |
+| 2 | 258 à 325 | **100 à 103 %** | 60 à 79 % | 43 à 56 % |
+| 3 | 369 à 546 | **102 à 105 %** | **89 à 101 %** | 60 à 70 % |
+| 5 | 310 à 494 | 60 à 89 % | **104 à 107 %** | 57 à 79 % |
+
+- Jusqu'à 3 back, le **back** sature le premier et le débit monte presque linéairement : **~140 à 150 req/s par instance** à 100 %, soit **~110 req/s à 80 %**.
+- Dès 3 back, la **gateway** sature à son tour (~500 req/s, ~400 à 80 %) : avec 5 back, le débit ne monte plus, et chute même à forte concurrence. **Multiplier le back seul ne suffit pas** : l'autoscaler pilote aussi la gateway et le front.
+- Le **front** garde de la marge (79 % au pire) : ~550 req/s à 80 %.
+
+Même logique pour la mémoire, avec des envois de fichiers de 40 Mo en parallèle (la lecture, elle, ne fait pas bouger la mémoire) :
+
+| Envois simultanés | Gateway (48 Mo) | Front (128 Mo) | Back (128 Mo, pire instance) |
+|---|---|---|---|
+| 5 | 61 % | 50 % | 42 % |
+| 10 | **98 %** | 77 % | 49 % |
+| 20 | **100 %, 11 `502` sur 20** | 91 % | 45 % |
+
+La gateway est le premier risque OOM : sa mémoire passe à **96 Mo en Swarm** (voir [Ce que Swarm ajoute](#ce-que-swarm-ajoute)). Le back n'est jamais en danger : il écrit en flux sur le disque.
+
+#### Nombre d'instances selon la charge
+
+| Charge (req/s) | back | gateway | front | CPU réservé en limites |
+|---|---|---|---|---|
+| < 110 | 1 | 1 | 1 | 1,7 |
+| 110 à 220 | 2 | 1 | 1 | 2,35 |
+| 220 à 330 | 3 | 1 | 1 | 3,0 |
+| 330 à 440 | 4 | 2 | 1 | 3,95 |
+| 440 à 550 | 5 | 2 | 1 | 4,6 |
+| 550 à 660 | 6 | 2 | 2 | 6,0 |
+
+D'où les bornes : **back 2 à 6** (2 pour la disponibilité ; 6 = `BACK_MAX_REPLICAS_PER_NODE`), **gateway 1 à 3**, **front 1 à 2**. Au-delà, plus d'instances n'apportent rien. Même tout au maximum (avec cleaner et autoscaler), la stack ne réserve que **~6,5 CPU sur 12 (54 %)** et **~1,4 Go sur 7,6 (19 %)** : sous les 80 %.
+
+#### Seuils retenus
+
+| Réglage | Valeur | Pourquoi |
+|---|---|---|
+| Monter d'une instance | CPU moyen > **70 %** ou mémoire > **80 %** | 70 % et pas 80 % : une instance met 10 à 15 s à être prête, la charge continue de monter pendant ce temps. |
+| Descendre d'une instance | CPU < **25 %** et mémoire < **50 %** | Écart large avec le seuil de montée (**hystérésis**) : sinon retirer une instance ferait remonter la charge au-dessus de 70 %, et le service oscillerait. |
+| Relevés consécutifs | **3** pour monter, **6** pour descendre | Un pic isolé ne crée pas d'instance ; retirer trop vite coûte plus cher que garder une instance. |
+| Pause après une action | **30 s** (montée), **60 s** (descente) | La nouvelle instance doit prendre sa part de la charge avant qu'on remesure. |
+| Intervalle | **10 s** (~14 s avec le relevé) | Plus souvent, l'autoscaler chargerait la machine qu'il surveille. |
+| Budget machine | **80 %** | La consigne, appliquée à la somme des limites de toute la stack. |
+
+#### Ce qui change par rapport à l'exemple fourni
+
+L'exemple du cours (`autoscale.sh` + `Dockerfile.autoscaler`) donne le principe : une image alpine avec `docker-cli`, le socket monté, un placement sur un manager, `docker service scale` à ±1 instance. Ses défauts, corrigés ici :
+
+| Dans l'exemple | Problème | Ici |
+|---|---|---|
+| **Somme** du CPU des instances comparée à 80 | La somme grandit avec le nombre d'instances : le service continue de monter alors que chaque instance est peu chargée. | **Moyenne** des instances. |
+| CPU en % d'**un cœur** | Une instance saturée à 0,65 CPU affiche 65 % : le seuil de 80 % ne serait **jamais** atteint. | CPU en % de la **limite** du service, lue dans le service. |
+| Aucun délai entre deux actions, un seul relevé | Une instance n'a pas fini de démarrer qu'une autre est déjà demandée. | Relevés consécutifs, pauses après action, hystérésis. |
+| Un service, nom en dur | Le goulot se déplace (back → gateway → front). | Plusieurs services, désignés par **labels**, bornes par service. |
+| CPU seulement | La gateway risque l'OOM avant la saturation CPU. | CPU **et** mémoire. |
+| Aucune limite globale | Rien n'empêche de saturer la machine. | Budget de **80 %** de la machine. |
+| `bash`, `curl`, `alpine:3.18`, root, pas de limites | Outils inutiles, version en fin de vie, aucun durcissement. | Alpine 3.22, `docker-cli` seul, non-root, lecture seule, 0,10 CPU / 64 Mo. |
+| `sleep` au premier plan, pas de `trap` | `docker stop` attend 10 s puis tue le conteneur (code `137`). | `trap` + `sleep & wait` : arrêt en 0,6 s, code `0`. |
+
+#### Démonstrations (mesurées)
+
+Charge de 3 minutes (`ab` en service ponctuel), puis repos, avec le suivi du nombre d'instances toutes les 10 s :
+
+| Moment | Ce que fait l'autoscaler |
+|---|---|
+| Départ | back 2, gateway 1, front 1 (les minimums) |
+| +41 s | back à **103 %** sur 3 relevés → **back 2 → 3** (« machine après ajout : cpu 35 % ») |
+| +92 s | la gateway devient le goulot (**98 %**) → **gateway 1 → 2** |
+| Ensuite | plus aucun service au-dessus de 70 % sur 3 relevés : rien à ajouter |
+| Fin de charge + 72 s | 6 relevés sous 25 % → **back 3 → 2, gateway 2 → 1**, sans oscillation |
+
+| Test | Résultat |
+|---|---|
+| Charge à 50 en parallèle (3 min) | 45 992 requêtes, **0 échec** |
+| Charge à 150 en parallèle (3 min) | 48 143 requêtes, **0 échec**, même trajectoire |
+| Budget machine abaissé à 30 % | 3 montées **refusées** et journalisées |
+| Scale manuel à 8 (borne max 6) | ramené à **6** au relevé suivant |
+| 20 envois de 40 Mo en parallèle (gateway à 96 Mo) | plus aucun `502` (11 avant) ; 5 refus `507` voulus (quota de 1 Go) |
+
+Extrait des logs (`docker service logs cloud_autoscaler`) :
+
+```
+cloud_back : 2 -> 3 instance(s) (cpu 103 %, mem 22 % au-dessus des seuils 70 % / 80 % sur 3 relevés ; machine après ajout : cpu 35 %, mem 9 %)
+cloud_gateway : 1 -> 2 instance(s) (cpu 98 %, mem 6 % au-dessus des seuils 70 % / 80 % sur 3 relevés ; machine après ajout : cpu 37 %, mem 11 %)
+cloud_back : 3 -> 2 instance(s) (cpu 0 %, mem 21 % sous les seuils 25 % / 50 % sur 6 relevés)
+```
+
+#### Ce que l'autoscaler ne règle pas (constaté)
+
+| Constat | Explication |
+|---|---|
+| **Rafale d'envois et front** | 20 envois de 40 Mo en parallèle mènent le front à **99 %** de ses 128 Mo (et 1 020 envois simultanés, lors d'une fausse manipulation, l'ont fait tuer par OOM, puis relancer par Swarm). Une rafale dure ~15 s, moins que les ~40 s (3 relevés) dont l'autoscaler a besoin : il réagit trop tard. La protection doit venir du front lui-même (plus de mémoire en Swarm, ou nombre d'envois simultanés limité) : amélioration identifiée, non faite. |
+| **Latence à forte concurrence sans service saturé** | À 150 requêtes en parallèle, back, front et gateway retombent par moments ensemble près de 0 % de CPU pendant que des requêtes attendent (p95 de 2,4 s). L'ouverture des connexions n'est pas en cause (19 ms au plus) : ce sont des pauses dans la chaîne front → gateway → back, qu'ajouter des instances ne corrige pas. L'autoscaler ne monte donc pas, ce qui est le bon comportement. |
+| **Réaction en ~40 s** | Choix assumé (3 relevés) : un autoscaler plus nerveux réagirait aux pics isolés et oscillerait. |
+
 ### Limites assumées
 
 - **Un seul nœud.** Plusieurs machines demanderaient un registre d'images partagé (l'image `registry:2` vient du Docker Hub, interdite par le sujet) et un stockage partagé entre machines (un volume local n'existe que sur sa machine ; il faudrait NFS ou équivalent).
-- **Pas d'auto-scaling natif** : le nombre d'instances est fixé (`replicas`) ou changé à la main (`docker service scale`), comme le précise le cours. Il faudrait un outil externe qui déclenche le scale selon la charge.
+- **Pas d'auto-scaling natif dans Swarm**, comme le précise le cours : il est fait par notre [autoscaler](#image-autoscaler-mode-swarm), au prix d'un accès au socket Docker (risque assumé et réduit, voir sa partie Sécurité).
 - **Swap non désactivable** en Swarm (`memswap_limit` refusé).
 - Les instances arrêtées restent visibles quelques minutes (`docker ps -a`) : c'est l'historique des tâches de Swarm.
 
@@ -1253,39 +1484,51 @@ Les limites de `deploy.resources.limits` s'appliquent **à chaque instance** : e
 ```mermaid
 flowchart TB
   nav(["🌐 Navigateur"])
-  subgraph swarm["Nœud Swarm unique · stack « cloud »"]
+  subgraph swarm["Nœud Swarm unique (manager) · stack « cloud »"]
     direction TB
-    front["<b>front</b> · 1 instance<br/>0,75 CPU"]
-    gateway["<b>gateway</b> · 1 instance<br/>0,30 CPU"]
+    front["<b>front</b> · 1 à 2 instances<br/>0,75 CPU · 128 Mo chacune"]
+    gateway["<b>gateway</b> · 1 à 3 instances<br/>0,30 CPU · 96 Mo chacune"]
     vip{{"adresse virtuelle<br/>du service back"}}
-    b1["<b>back #1</b><br/>0,65 CPU"]
-    b2["<b>back #2</b><br/>0,65 CPU"]
-    b3["<b>back #3</b><br/>0,65 CPU"]
+    b1["<b>back #1</b>"]
+    b2["<b>back #2</b>"]
+    bn["<b>back #3 à #6</b><br/>selon la charge"]
     vol[("volume <b>cloud_stockage</b>")]
     subgraph isole["réseau isole (internal)"]
       cleaner["<b>cleaner</b> · toujours 1 instance"]
     end
+    subgraph isoleas["réseau isole-autoscaler (internal)"]
+      autoscaler["<b>autoscaler</b> · 1 instance<br/>0,10 CPU · 64 Mo"]
+    end
+    sock[["socket Docker<br/>/var/run/docker.sock"]]
   end
   nav <-- ":8080 (routing mesh)" --> front
   front <-- "interne-front" --> gateway
   gateway <-- "interne-back" --> vip
   vip <--> b1
   vip <--> b2
-  vip <--> b3
+  vip -.-> bn
   b1 <--> vol
   b2 <--> vol
-  b3 <--> vol
+  bn -.-> vol
   cleaner <-- "suppression des expirés" --> vol
+  autoscaler <-- "docker stats<br/>docker service scale" --> sock
+  sock -. "ajoute / retire des instances<br/>(labels autoscale.*)" .-> front
+  sock -.-> gateway
+  sock -.-> bn
 
   classDef pub fill:#e6efff,stroke:#1d63ed,color:#1b2330
   classDef int fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
   classDef data fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
   classDef iso fill:#fdf0e2,stroke:#d9771a,color:#1b2330
+  classDef ctl fill:#fde8e8,stroke:#c0392b,color:#1b2330
   class front pub
-  class gateway,vip,b1,b2,b3 int
+  class gateway,vip,b1,b2,bn int
   class vol data
   class cleaner iso
+  class autoscaler,sock ctl
 ```
+
+Les flèches en pointillés sont ce qui **varie** : les instances 3 à 6 du back n'existent que sous charge, et l'autoscaler agit sur les services **à travers le moteur Docker** (le socket), jamais par le réseau.
 
 ### Pourquoi c'est un avantage de Docker par rapport aux VM
 
@@ -1330,6 +1573,15 @@ Récapitulatif des vérifications faites sur la stack finale (Alpine 3.22, limit
 | Swarm : garde-fous | 9 instances demandées (plafond 6) ; 5 CPU réservés par instance | Instances en trop `Pending`, application toujours disponible |
 | Swarm : ordre de démarrage | Volume neuf initialisé par le cleaner | Le back y écrit quand même (`201`) |
 | Swarm : persistance | `docker stack rm` puis redéploiement | Fichiers intacts |
+| Autoscaling : montée | 3 min de charge (`ab`, 50 puis 150 en parallèle) | back 2 → 3 en 41 s, gateway 1 → 2 en 92 s ; **0 échec** sur 94 000 requêtes |
+| Autoscaling : descente | Fin de la charge | Retour aux minimums en 72 s, sans oscillation |
+| Autoscaling : bornes | Scale manuel à 8 (max 6) | Ramené à 6 au relevé suivant |
+| Autoscaling : budget machine | Budget abaissé à 30 % | Montées refusées et journalisées |
+| Autoscaling : mémoire | 20 envois de 40 Mo en parallèle | Plus aucun `502` (gateway à 96 Mo) |
+| Autoscaler : sécurité | `id`, `touch`, `wget` dans le conteneur | Non-root, lecture seule, aucun réseau joignable ; seuls montages : socket et `/tmp` |
+| Autoscaler : arrêt | `docker stop`, mise à jour du service | **Code `0`**, en 0,6 s |
 
-**Défauts trouvés par ces tests et corrigés** (détaillés dans leurs parties) : front qui contournait la gateway (réseaux séparés), client bloqué après un `413` (relais), clients HTTP/1.0 bloqués (en-têtes hop-by-hop), limites mémoire doublées par la swap (`memswap_limit`), UID identiques entre back et cleaner (UID explicites), worker tué en pleine passe (`setsid`), téléchargements tronqués avec un `tmpfs` (`proxy_max_temp_file_size 0`), back devenu goulot avec l'application réelle (CPU redosés), gateway proche de sa limite mémoire pendant des envois parallèles (48 Mo).
+**Défauts trouvés par ces tests et corrigés** (détaillés dans leurs parties) : front qui contournait la gateway (réseaux séparés), client bloqué après un `413` (relais), clients HTTP/1.0 bloqués (en-têtes hop-by-hop), limites mémoire doublées par la swap (`memswap_limit`), UID identiques entre back et cleaner (UID explicites), worker tué en pleine passe (`setsid`), téléchargements tronqués avec un `tmpfs` (`proxy_max_temp_file_size 0`), back devenu goulot avec l'application réelle (CPU redosés), gateway proche de sa limite mémoire pendant des envois parallèles (96 Mo en Swarm, plus aucun `502`).
+
+**Défaut identifié, non corrigé :** front à 99 % de sa mémoire lors d'une rafale de 20 envois de 40 Mo, trop rapide pour l'autoscaler (voir [Ce que l'autoscaler ne règle pas](#ce-que-lautoscaler-ne-règle-pas-constaté)).
 

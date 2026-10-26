@@ -26,10 +26,11 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `Frontend/` | multi-stage : `build` (alpine + nodejs + npm, `ng build`) puis alpine + nodejs + tini | Sert l'application Angular compilée (`public/`, depuis `app/`) et relaie `/api/*` vers la gateway (`server.js`, Node natif). **Seul service publié.** |
 | `Gateway/` | alpine + nginx + gettext-envsubst | Passerelle d'API : seul chemin vers le back, n'accepte que `/api/` et `/health`. Config générée au run (`nginx.conf.template` + `entrypoint.sh`). |
 | `Backend/` | multi-stage : `deps` (alpine + nodejs + npm, `npm ci`) puis alpine + nodejs + tini | API Express + multer : `GET/POST /api/files` (champ `ttl`), `GET/DELETE /api/files/:name` (`410` si expiré), `GET /health`. Fichiers dans `STORAGE_DIR` (volume), nommés `<expiration epoch s>-<aléatoire>__<nom>` ; envois en cours dans `.incoming/` puis renommage atomique. Groupe `stockage` (GID = ARG `STORAGE_GID`) partagé avec le futur cleaner. |
-| `docker-stack.yml` + `swarm-deploy.ps1/.sh` | – | Déploiement Swarm : 3 back, 1 cleaner (réseau `isole`), réservations, plafond, mises à jour progressives. |
+| `docker-stack.yml` + `swarm-deploy.ps1/.sh` | – | Déploiement Swarm : back 2 à 6, gateway 1 à 3, front 1 à 2 (pilotés par l'autoscaler), 1 cleaner (réseau `isole`), réservations, plafond, mises à jour progressives. Le script charge le `.env` puis construit les 5 images. |
+| `Autoscaler/` | alpine + docker-cli (Swarm uniquement) | 5e image : pilote le nombre d'instances des services portant les labels `autoscale.*` (CPU moyen en % de la limite, mémoire de la pire instance, hystérésis 70 / 25 %, relevés consécutifs, pauses, budget machine 80 %). Socket Docker monté, non-root (UID 1003, groupe `DOCKER_GID`), réseau `isole-autoscaler`, `read_only`. Script PID 1, SIGTERM → code `0`. |
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
-| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **local, non versionné** (`.gitignore`). Service `bench` **commenté** dans le compose : le décommenter pour mesurer. `run-bench.ps1` mesure les pics CPU / mémoire. |
+| `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **local, non versionné** (`.gitignore`). Service `bench` **commenté** dans le compose : le décommenter pour mesurer. `run-bench.ps1` (compose), `run-swarm-bench.ps1` (Swarm, CPU en % de la limite), `run-autoscale-demo.ps1` (démo de l'autoscaler). |
 | `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
@@ -136,6 +137,16 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Un seul `cleaner`, toujours. L'image du cleaner initialise aussi le dossier du volume (pas d'ordre de démarrage en Swarm).
 - Bench en Swarm : `ab` lancé comme service ponctuel sur `cloud_public` (pas via `host.docker.internal`, non comparable et instable sous forte charge).
 
+### Autoscaler
+
+- Ne pilote **que** les services portant `deploy.labels` `autoscale.enabled: "true"`, `autoscale.min`, `autoscale.max`. **Jamais de label `autoscale` sur le cleaner** (deux workers supprimeraient les mêmes fichiers) ni sur l'autoscaler lui-même.
+- Bornes dans le `.env` (`*_AUTOSCALE_MIN/MAX`) ; `BACK_AUTOSCALE_MAX` ≤ `BACK_MAX_REPLICAS_PER_NODE`. Seuils et délais : section « Autoscaling » du `.env`, justifiés par le benchmark (`../features/Compte rendu/compte-rendu-benchmark-autoscaling.md`).
+- Budget machine (`AUTOSCALE_HOST_BUDGET_PCT=80`) : ne jamais le relever ; le baisser seulement pour un test, puis le remettre.
+- **Socket Docker = accès root à l'hôte** : seul montage autorisé avec le `tmpfs`, aucun réseau, `read_only`, non-root. Pas de `:ro` (trompeur). Toute évolution de l'image doit garder ces protections.
+- `DOCKER_GID=0` sur Docker Desktop (mesuré) ; sur Linux, GID du groupe `docker` de l'hôte.
+- Relancer `swarm-deploy` remet chaque service à son minimum : l'autoscaler réajuste au relevé suivant.
+- Limite connue : une rafale d'envois (~15 s) est plus rapide que sa réaction (~40 s) ; le front atteint 99 % de 128 Mo à 20 envois de 40 Mo (non corrigé).
+
 ### Arrêt d'urgence
 
 Si la stack Swarm commence à trop consommer de RAM ou de CPU (machine qui rame, ventilateurs à fond, `docker stats` qui s'emballe), **arrêter immédiatement** :
@@ -151,6 +162,8 @@ docker swarm leave --force   # quitte le mode Swarm : tous les services et toute
 ## Pièges connus (poste Windows)
 - PowerShell 5.1 lit les scripts `.ps1` en ANSI : éviter les remplacements de texte accentué par script. Pour modifier des fichiers, utiliser l'outil d'édition, ou Node.
 - En PowerShell, `@(@("a","b"))` est aplati en `@("a","b")` : attention aux tableaux de paires.
+- **Jamais de boucle `docker stats` en tâche de fond (`Start-Job`) dans un script de test** : interrompues, elles continuent de tourner (580 processus PowerShell, machine figée, redémarrage nécessaire). Une seule boucle, bornée en nombre de tours, dans le processus du script.
+- `powershell -File script.ps1 -Param 10,20` passe **la chaîne** `10,20` (lue comme 1020 pour un `[int[]]`) : lancer une valeur par appel. Tests de charge : toujours un nombre de processus plafonné et vérifier ensuite qu'aucun `curl` / `docker` ne reste.
 - `sed` et `git` ne sont pas disponibles dans le Bash de l'agent : utiliser PowerShell pour git.
 - **Disque C: plein** sur le poste : npm échoue (`ENOSPC`) car son cache et ses fichiers temporaires sont sur C:. Lancer npm via `cmd` avec le cache et `TEMP` sur D: : `cmd /c "set TEMP=D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache\tmp&& set TMP=...&& cd Frontend\app && npm install --cache D:\DOCUMENT\COURS\M2\Dev Docker\TP\.npm-cache"`.
 - Application Angular : `Frontend/app/` (Angular 22). Dev : `npx ng serve` (proxy `/api` → `127.0.0.1:8080`, la stack doit tourner).
