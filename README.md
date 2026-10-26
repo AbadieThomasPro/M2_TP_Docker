@@ -8,8 +8,6 @@ Aucune image applicative n'est récupérée telle quelle depuis Docker Hub : cha
 
 Un service de partage de **fichiers temporaires**, sur le modèle de WeTransfer, hébergé sur notre propre « cloud » Docker. Chaque fichier envoyé a une **durée de vie** (1 h, 24 h, 7 jours...) : passé ce délai, il n'est plus téléchargeable, puis il est supprimé automatiquement par un service dédié.
 
-Le sujet de départ, un cloud de stockage générique, a été **affiné après un retour du prof** : une spécificité (les fichiers temporaires) donne davantage de choix Docker à concevoir et à justifier.
-
 | Fonctionnalité | Description |
 |---|---|
 | Envoyer un fichier | Avec une durée de vie choisie (défaut 24 h, maximum 7 jours) |
@@ -113,7 +111,7 @@ Tous les réglages (versions, ports, durées de vie, quotas, CPU, mémoire) sont
 
 ## Architecture
 
-Les schémas ci-dessous sont écrits en [Mermaid](https://mermaid.js.org/) : GitHub les affiche directement, et ils restent versionnés et modifiables comme du code. Une version image du schéma d'architecture est aussi disponible : [docs/architecture.png](docs/architecture.png).
+
 
 ### Schéma d'architecture : services, réseaux, ports, volume
 
@@ -161,6 +159,21 @@ flowchart TB
 | Réseaux | `public` (front), `interne-front` (front + gateway), `interne-back` (gateway + back), **aucun** pour le cleaner. La gateway est le seul pont : le lien direct front → back est bloqué. |
 | Volume | `stockage`, monté sur `/data` du back (écriture) et du cleaner (suppression), avec un groupe Unix commun. |
 | Ressources | Limites CPU / mémoire par service, issues du `.env` et dimensionnées par un benchmark. |
+
+#### Le même schéma en mode Swarm
+
+![Architecture en mode Swarm : front, gateway, 3 instances du back derrière une adresse virtuelle, cleaner isolé, volume cloud_stockage](docs/architecture-swarm.png)
+
+Mêmes services, mêmes réseaux et même volume : seul le **nombre d'instances** et la façon de les joindre changent. Détail et mesures dans la partie [Scalabilité](#scalabilité).
+
+| Élément | Ce que montre le schéma |
+|---|---|
+| Services | `front`, `gateway` et `cleaner` en **1 instance** ; `back` en **3 instances** (`replicas: 3`). Le cleaner reste unique : deux workers supprimeraient les mêmes fichiers. |
+| Port | `8080` publié par le **routing mesh** de Swarm : l'hôte reçoit la connexion et la transmet au front. |
+| Réseaux | `interne-front` (front, gateway) et `interne-back` (gateway, back) comme dans le compose. Le cleaner est sur `isole` (`internal: true`) : Swarm n'accepte pas `network_mode: none`, ce réseau sans sortie le remplace. |
+| Adresse virtuelle | La gateway appelle `back` comme avant ; Swarm lui donne une **adresse virtuelle** et répartit les connexions entre les 3 instances. Aucune config nginx à changer pour ajouter une instance. |
+| Volume | `cloud_stockage` (le volume `stockage` préfixé par le nom de la stack) est partagé par les 3 back (lecture et écriture) et le cleaner (suppression). |
+| CPU | back 0,65 chacun, front 0,75 et gateway 0,30 : ils relaient le trafic de 3 back, d'où plus de CPU que dans le compose (0,25 et 0,10). |
 
 ### Schéma des communications : chemin d'une requête
 
@@ -245,6 +258,7 @@ Chaque service attend que le précédent soit `healthy` (`depends_on: condition:
 │   └── cleanup.sh           # supprime les fichiers expirés et les envois abandonnés
 ├── docs/
 │   ├── architecture.png     # export image du schéma d'architecture (Mermaid)
+│   ├── architecture-swarm.png  # export image du schéma d'architecture en mode Swarm
 │   └── interface.png        # capture de l'interface
 ├── docker-compose.yml       # orchestration principale (Docker Compose)
 ├── docker-stack.yml         # déploiement Swarm : 3 instances du back, mises à jour progressives
