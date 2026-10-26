@@ -40,6 +40,7 @@ Définie pour chaque service dans le compose, avec des valeurs venant du `.env` 
 | `deploy.resources.limits.memory` | Plafond de mémoire. S'il est dépassé, le noyau tue le processus (OOM killer, code `137`), puis `restart: unless-stopped` le relance. |
 | `memswap_limit` (égal à la limite mémoire) | **Désactive la swap.** Par défaut, Docker ajoute autant de swap que de RAM (mesuré : `MemorySwap` = 2 × la limite) : un conteneur « limité à 128 Mo » pouvait en réalité occuper 256 Mo, en ralentissant au lieu de s'arrêter. |
 | `deploy.resources.reservations.memory` | Mémoire **garantie** (réservation souple) : si l'hôte manque de mémoire, Docker reprend d'abord la mémoire des conteneurs qui dépassent leur réservation. |
+| `sysctls` `net.ipv4.tcp_rmem` / `tcp_wmem` (front et gateway) | **Tampons TCP plafonnés à 1 Mo** (`TCP_BUFFER_MAX_BYTES`). Les tampons du noyau comptent dans la mémoire du conteneur : jusqu'à 10 Mo par connexion par défaut, et un relais tient 2 connexions par envoi. Mesuré : 20 envois simultanés de 40 Mo faisaient tuer le front (OOM) ; avec le plafond, front à 68 % et débit inchangé. Réglage propre au conteneur (espace de noms réseau), sans effet sur l'hôte. |
 
 Valeurs retenues, justifiées par le [benchmark](benchmark.md) :
 

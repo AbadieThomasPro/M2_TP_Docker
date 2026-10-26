@@ -121,6 +121,11 @@ services:
     # ... d'où un /tmp en RAM, limité car il compte dans la limite mémoire du conteneur
     tmpfs:
       - /tmp:size=${GATEWAY_TMPFS_SIZE}
+    # Tampons TCP plafonnés : chaque envoi relayé en réservait jusqu'à 10 Mo dans le noyau, comptés dans la
+    # mémoire du conteneur (voir .env). Réglage propre au conteneur (espace de noms réseau), pas à l'hôte
+    sysctls:
+      net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
+      net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
     stop_grace_period: 10s
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
@@ -158,6 +163,10 @@ services:
     memswap_limit: ${FRONT_MEMORY}     # pas de swap, comme le back
     # Lecture seule : le front ne fait que lire ses fichiers et relayer, il n'écrit nulle part
     read_only: true
+    # Tampons TCP plafonnés, comme la gateway : sans ça, 20 envois simultanés le faisaient tuer (OOM, mesuré)
+    sysctls:
+      net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
+      net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
     stop_grace_period: 10s
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
