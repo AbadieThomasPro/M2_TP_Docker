@@ -7,6 +7,7 @@
 # Seule la STRUCTURE est répétée : toutes les VALEURS viennent du même .env, chargé par le script
 # (docker stack deploy ne lit pas le .env lui-même).
 # Les images sont construites par "docker compose build" : Swarm ignore build et utilise des images existantes.
+# L'autoscaler, propre au mode Swarm, est construit à part par le même script.
 
 services:
   back:
@@ -27,10 +28,16 @@ services:
     networks:
       - interne-back
     deploy:
-      # 3 instances : le back est le goulot mesuré (~2,8 ms de CPU par liste) et il est sans état
-      # (expiration dans le nom des fichiers, volume partagé) : n'importe quelle instance répond à tout.
-      # Swarm répartit les requêtes entre elles (adresse virtuelle du service "back")
-      replicas: 3
+      # Le back est sans état (expiration dans le nom des fichiers, volume partagé) : n'importe quelle
+      # instance répond à tout, Swarm répartit les requêtes entre elles (adresse virtuelle du service "back").
+      # Départ au minimum : c'est l'autoscaler qui ajoute des instances selon la charge mesurée.
+      # Relancer swarm-deploy remet ce nombre : l'autoscaler le réajuste au relevé suivant
+      replicas: ${BACK_AUTOSCALE_MIN}
+      # Lus par l'autoscaler : il ne pilote que les services qui portent ces labels, entre min et max
+      labels:
+        autoscale.enabled: "true"
+        autoscale.min: "${BACK_AUTOSCALE_MIN}"
+        autoscale.max: "${BACK_AUTOSCALE_MAX}"
       # Plafond d'instances par machine : une commande "scale" excessive (ou un outil d'auto-scaling
       # externe, Swarm n'en a pas) ne peut pas multiplier le back au-delà ; le surplus reste en attente
       placement:
@@ -113,12 +120,19 @@ services:
       - interne-front
       - interne-back
     deploy:
-      replicas: 1
+      # Goulot mesuré dès 3 back : elle aussi est multipliée par l'autoscaler. Sans état, et le front
+      # la joint par l'adresse virtuelle du service "gateway" : rien à changer pour ajouter une instance
+      replicas: ${GATEWAY_AUTOSCALE_MIN}
+      labels:
+        autoscale.enabled: "true"
+        autoscale.min: "${GATEWAY_AUTOSCALE_MIN}"
+        autoscale.max: "${GATEWAY_AUTOSCALE_MAX}"
       resources:
         limits:
           # Plus que dans le compose (0,10) : elle relaie le trafic de 3 back (rapport de coûts 7 / 3 / 1)
           cpus: "${SWARM_GATEWAY_CPUS}"
-          memory: ${GATEWAY_MEMORY}
+          # 96 Mo et non 48 comme dans le compose : 98 % de 48 Mo mesurés pour 10 envois de 40 Mo en parallèle
+          memory: ${SWARM_GATEWAY_MEMORY}
         reservations:
           cpus: "${GATEWAY_CPUS_RESERVATION}"
           memory: ${GATEWAY_MEMORY_RESERVATION}
@@ -146,7 +160,12 @@ services:
       - public
       - interne-front
     deploy:
-      replicas: 1
+      # Le routing mesh répartit les connexions du port 8080 entre les instances du front
+      replicas: ${FRONT_AUTOSCALE_MIN}
+      labels:
+        autoscale.enabled: "true"
+        autoscale.min: "${FRONT_AUTOSCALE_MIN}"
+        autoscale.max: "${FRONT_AUTOSCALE_MAX}"
       resources:
         limits:
           # Plus que dans le compose (0,25) : sinon le front devient le goulot dès 3 back (mesuré)
@@ -162,6 +181,57 @@ services:
         order: start-first
         failure_action: rollback
 
+  # Swarm n'a pas d'autoscaling : ce service ajoute ou retire des instances selon le CPU et la mémoire
+  autoscaler:
+    image: docker-cloud/autoscaler
+    # Seuils et délais : valeurs justifiées dans le .env (section Autoscaling)
+    environment:
+      AUTOSCALE_INTERVAL_S: ${AUTOSCALE_INTERVAL_S}
+      AUTOSCALE_CPU_UP: ${AUTOSCALE_CPU_UP}
+      AUTOSCALE_CPU_DOWN: ${AUTOSCALE_CPU_DOWN}
+      AUTOSCALE_MEM_UP: ${AUTOSCALE_MEM_UP}
+      AUTOSCALE_MEM_DOWN: ${AUTOSCALE_MEM_DOWN}
+      AUTOSCALE_UP_SAMPLES: ${AUTOSCALE_UP_SAMPLES}
+      AUTOSCALE_DOWN_SAMPLES: ${AUTOSCALE_DOWN_SAMPLES}
+      AUTOSCALE_COOLDOWN_UP_S: ${AUTOSCALE_COOLDOWN_UP_S}
+      AUTOSCALE_COOLDOWN_DOWN_S: ${AUTOSCALE_COOLDOWN_DOWN_S}
+      AUTOSCALE_HOST_BUDGET_PCT: ${AUTOSCALE_HOST_BUDGET_PCT}
+    volumes:
+      # Le socket est le seul accès au moteur, et il équivaut à root sur l'hôte : risque assumé et réduit
+      # (seul montage, aucun réseau, lecture seule, utilisateur non-root). Un ":ro" serait trompeur :
+      # il empêche de modifier le fichier, pas d'envoyer des commandes à Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Heartbeat, relevé courant et config du client docker (1 Mo, compté dans sa mémoire)
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 1048576
+    read_only: true
+    stop_grace_period: 10s
+    # Son propre réseau interne, sans autre membre : il ne parle qu'au moteur, par le socket (un fichier,
+    # pas le réseau). Distinct de "isole" : le cleaner et lui n'ont aucune raison de se joindre
+    networks:
+      - isole-autoscaler
+    deploy:
+      # Une seule instance : deux autoscalers prendraient des décisions contradictoires.
+      # Pas de labels autoscale : il ne se pilote pas lui-même (pas plus que le cleaner)
+      replicas: 1
+      # Seul un manager accepte "docker service scale" ; sur un worker il ne pourrait rien faire
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "${AUTOSCALER_CPUS}"
+          memory: ${AUTOSCALER_MEMORY}
+        reservations:
+          cpus: "${AUTOSCALER_CPUS_RESERVATION}"
+          memory: ${AUTOSCALER_MEMORY_RESERVATION}
+      # Il sort en erreur si le socket est inaccessible : Swarm le relance, avec un délai pour ne pas boucler
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+
 # Mêmes réseaux que le compose, en "overlay" : le type de réseau de Swarm, qui peut s'étendre sur
 # plusieurs machines. Les réseaux internes restent sans accès extérieur
 networks:
@@ -175,6 +245,10 @@ networks:
     internal: true
   # Remplace network_mode: none pour le cleaner
   isole:
+    driver: overlay
+    internal: true
+  # Même principe pour l'autoscaler
+  isole-autoscaler:
     driver: overlay
     internal: true
 

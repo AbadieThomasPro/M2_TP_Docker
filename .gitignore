@@ -5,5 +5,3 @@ dist/
 .angular/
 # Logs locaux
 *.log
-# Outil de benchmark : utilisé localement pour dimensionner les ressources, pas livré dans le rendu
-Bench/
