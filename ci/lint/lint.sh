@@ -24,7 +24,7 @@ done < "$LIST"
 
 say ""
 say "== node --check : syntaxe JavaScript (hors application Angular, compilée par son image) =="
-lister -name '*.js'
+lister \( -name '*.js' -o -name '*.mjs' \)
 while IFS= read -r f; do
   if out=$(node --check "$f" 2>&1); then say "OK      $f"; else say "ERREUR  $f"; say "$out"; rc=1; fi
 done < "$LIST"

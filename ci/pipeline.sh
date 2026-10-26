@@ -8,7 +8,8 @@
 #   3. intégration  vraie stack isolée (projet docker-cloud-it), tests de bout en bout, arrêt en code 0
 #   4. déploiement  ci/deploy.sh : mise à jour progressive sur Swarm (si Swarm est actif)
 #
-# Usage : ./ci/pipeline.sh [--sans-deploiement]
+# Usage : ./ci/pipeline.sh [--sans-deploiement] [--ia]
+#   --ia : ajoute l'étape ai-test (tests écrits par un agent Claude, jeton dans ci/ia.env)
 # Code de sortie : 0 si tout est vert. Au premier échec, le pipeline s'arrête : rien n'est déployé,
 # la version en service reste en place. Rapports : ci/reports/
 
@@ -16,9 +17,25 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 DEPLOY=1
-[ "${1:-}" = "--sans-deploiement" ] && DEPLOY=0
+IA=0
+for arg in "$@"; do
+  case "$arg" in
+    --sans-deploiement) DEPLOY=0 ;;
+    # Étape IA sur demande seulement : elle consomme la limite de l'abonnement Claude de l'utilisateur
+    --ia) IA=1 ;;
+    *) echo "Option inconnue : $arg (options : --sans-deploiement, --ia)"; exit 2 ;;
+  esac
+done
 
 CI="docker compose -f ci/compose.yml --env-file .env"
+if [ "$IA" -eq 1 ]; then
+  # Échec franc et immédiat sans jeton : demander l'IA et ne pas l'avoir n'est jamais un succès
+  if ! grep -q '^CLAUDE_CODE_OAUTH_TOKEN=.*sk-ant-' ci/ia.env 2> /dev/null || grep -q 'FAUX-JETON' ci/ia.env; then
+    echo "❌ --ia demandé sans jeton : copier ci/ia.env.example en ci/ia.env et y mettre le sien (claude setup-token)"
+    exit 2
+  fi
+  CI="$CI --profile ia"
+fi
 IT="docker compose -p docker-cloud-it -f docker-compose.yml -f ci/compose.integration.yml --env-file .env"
 SUMMARY=""
 T0=$(date +%s)
@@ -69,6 +86,8 @@ $CI down -v > /dev/null 2>&1
 $CI up --abort-on-container-failure
 rc=$?
 $CI cp lint:/reports/. ci/reports/ > /dev/null 2>&1
+# Tests écrits par l'agent copiés pour relecture humaine, même (surtout) si l'étape a échoué
+[ "$IA" -eq 1 ] && mkdir -p ci/reports/ai-tests && $CI cp ai-test:/tests/. ci/reports/ai-tests/ > /dev/null 2>&1
 [ "$rc" -eq 0 ] || step_fail "$rc"
 step_ok
 

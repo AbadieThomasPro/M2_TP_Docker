@@ -12,7 +12,9 @@ const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const STORAGE_DIR = process.env.STORAGE_DIR || '/data/files';
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 50);
+// 10 par défaut, comme l'ENV de l'image et la documentation (l'ancien 50 les contredisait : écart
+// trouvé par l'étape ai-test de la CI). Le déploiement règle sa valeur dans le .env
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 10);
 const TTL_DEFAULT_H = Number(process.env.TTL_DEFAULT_H || 24);
 const TTL_MAX_H = Number(process.env.TTL_MAX_H || 168);
 // 0 = pas de quota
