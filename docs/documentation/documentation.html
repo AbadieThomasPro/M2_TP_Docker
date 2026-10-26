@@ -58,6 +58,9 @@
   .chip { border: 1.5px solid; border-radius: 12px; padding: 1mm 3mm; font-weight: 600; font-size: 8.8pt; }
   .arrow { color: var(--muted); font-size: 8pt; }
   .note { font-size: 8.4pt; color: var(--muted); margin: 1mm 0; }
+  /* Barème V2 plus long (12 lignes) : lignes resserrées pour que la page de garde tienne sur une page */
+  table.bareme td, table.bareme th { padding: 0.8mm 2mm; }
+  .diagram.h-ci svg { max-height: 46mm; }
   footer { font-size: 7.5pt; color: var(--muted); margin-top: 3mm; }
 </style>
 </head>
@@ -91,27 +94,31 @@
         <tr><td>Plusieurs images</td><td><code>Frontend/</code> <code>Gateway/</code> <code>Backend/</code> <code>Cleaner/</code> <code>Autoscaler/</code></td></tr>
         <tr><td>Un ou plusieurs compose</td><td><code>docker-compose.yml</code> (principal), <code>docker-stack.yml</code> (Swarm)</td></tr>
         <tr><td>Documentation des choix</td><td>Ce document (synthèse) et le dossier <code>docs/</code> (détail, mesures) ; <code>README.md</code> : installation</td></tr>
-        <tr><td>Schéma de l'architecture</td><td>Pages 2, 3 et 7 (avec légendes)</td></tr>
+        <tr><td>Schéma de l'architecture</td><td>Pages 2, 3, 7 et 9 (avec légendes)</td></tr>
+        <tr><td>Consigne supplémentaire</td><td><code>Autoscaler/</code> (scaling), <code>ci/lint</code>, <code>ci/test</code> (+ <code>ci/ai-test</code>) : page 9</td></tr>
       </table>
     </div>
     <div>
-      <h3>Barème → page</h3>
-      <table>
-        <tr><th>Critère</th><th>Page</th></tr>
-        <tr><td>Dépendances installées</td><td>4</td></tr>
-        <tr><td>Manipulations sur l'OS</td><td>4</td></tr>
-        <tr><td>Arguments attendus</td><td>5</td></tr>
-        <tr><td>Entrypoints choisis</td><td>5</td></tr>
-        <tr><td>Arguments traduits dans le compose</td><td>5</td></tr>
-        <tr><td>Limitation des ressources expliquée</td><td>6</td></tr>
-        <tr><td>SIGTERM gérés</td><td>6</td></tr>
-        <tr><td>Dépendances entre conteneurs</td><td>3</td></tr>
-        <tr><td>Schéma des communications</td><td>2, 3, 7</td></tr>
+      <h3>Barème (sujet V2) → page</h3>
+      <table class="bareme">
+        <tr><th>Critère</th><th>Pts</th><th>Page</th></tr>
+        <tr><td>Mise en forme du rendu</td><td>0,5</td><td>toutes</td></tr>
+        <tr><td>Dépendances installées</td><td>0,5</td><td>4</td></tr>
+        <tr><td>Manipulations sur l'OS</td><td>1</td><td>4</td></tr>
+        <tr><td>Arguments attendus</td><td>0,5</td><td>5</td></tr>
+        <tr><td>Entrypoints choisis</td><td>1</td><td>5</td></tr>
+        <tr><td>Arguments traduits dans le compose</td><td>1</td><td>5</td></tr>
+        <tr><td>Limitation des ressources expliquée</td><td>1</td><td>6</td></tr>
+        <tr><td>SIGTERM gérés</td><td>1</td><td>6</td></tr>
+        <tr><td>Dépendances entre conteneurs</td><td>0,5</td><td>3</td></tr>
+        <tr><td>Schéma des communications</td><td>1</td><td>2, 3, 7</td></tr>
+        <tr><td>Docker pour le scaling : autoscaler</td><td>1</td><td>7, 9</td></tr>
+        <tr><td>Docker pour la CI/CD : lint, tests</td><td>1</td><td>9</td></tr>
       </table>
     </div>
   </div>
 
-  <h3>Les 5 images en une ligne</h3>
+  <h3>Les 5 images en une ligne <span class="note">(base <code>alpine:3.22</code>, autorisée par l'enseignant : tout le reste est installé et configuré par nos soins)</span></h3>
   <table>
     <tr><th>Image</th><th>Rôle</th><th>Pourquoi elle existe</th></tr>
     <tr><td><b>front</b></td><td>Sert l'application Angular, relaie <code>/api</code></td><td>Seul point d'entrée : le navigateur ne connaît qu'une adresse</td></tr>
@@ -120,7 +127,6 @@
     <tr><td><b>cleaner</b></td><td>Worker : supprime les fichiers expirés</td><td>Aucun réseau : ne parle à personne, agit sur le volume partagé</td></tr>
     <tr><td><b>autoscaler</b> (Swarm)</td><td>Ajuste le nombre d'instances selon CPU / mémoire</td><td>Swarm n'a pas d'autoscaling natif, et ceux du Hub sont interdits</td></tr>
   </table>
-  <p class="note">Base <code>alpine:3.22</code> (autorisée par l'enseignant) : tout le reste est installé et configuré par nos soins.</p>
 </section>
 
 <!-- ===================== PAGE 2 : ARCHITECTURE COMPOSE ===================== -->
@@ -429,9 +435,76 @@ flowchart TB
     <tr><td>Un seul nœud Swarm</td><td>Plusieurs machines demanderaient un registre (<code>registry:2</code> vient du Hub) et un stockage partagé</td></tr>
     <tr><td>Rafale d'envois</td><td>Plus rapide que l'autoscaler (~15 s contre ~40 s) : protégée à la source par des tampons TCP plafonnés (<code>sysctls</code>) ; ~23 envois de 40 Mo simultanés sous 80 % par front (avant : OOM dès 20)</td></tr>
   </table>
-  <p class="note"><b>CI/CD</b> : <code>ci/pipeline.sh</code> (ou <code>.ps1</code>), chaque étape dans son conteneur alpine : build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests de bout en bout sur une stack isolée → déploiement Swarm progressif avec retour arrière automatique. Pipeline complet : 153 s ; 0 échec sur 86 332 requêtes pendant le déploiement (détail : <code>docs/ci-cd.md</code>).</p>
-  <p class="note"><b>Rejouer les tests</b> : outil de charge <code>Bench/</code> (alpine + <code>ab</code>) ; démonstration de l'autoscaling en une commande : <code>./Bench/run-autoscale-demo.sh</code> (mode d'emploi : <code>docs/tester-la-charge.md</code>).</p>
-  <footer>Détail des mesures, des tests et de chaque choix : dossier <code>docs/</code> du dépôt · github.com/AbadieThomasPro/M2_TP_Docker</footer>
+  <p class="note"><b>Rejouer les tests</b> : outil de charge <code>Bench/</code> (alpine + <code>ab</code>) ; démonstration de l'autoscaling en une commande : <code>./Bench/run-autoscale-demo.sh</code> (mode d'emploi : <code>docs/tester-la-charge.md</code>). <b>CI/CD</b> : page 9.</p>
+</section>
+
+<!-- ===================== PAGE 9 : CI/CD ===================== -->
+<section class="page">
+  <h2>CI/CD et consigne supplémentaire <span class="crit">Docker pour le scaling ou la CI/CD (×2)</span></h2>
+  <p class="lead"><code>./ci/pipeline.sh</code> (Windows : <code>ci/pipeline.ps1</code>) : <b>chaque étape est un conteneur alpine</b>, réussie si elle sort avec le code <code>0</code>. Au premier échec, tout s'arrête : rien n'est déployé.</p>
+
+  <h3>Consigne supplémentaire : au moins 2 conteneurs parmi scaling, lint, tests</h3>
+  <table>
+    <tr><th>Demandé</th><th>Conteneur : paquets</th><th>Ce qu'il fait</th></tr>
+    <tr><td><b>Scaling</b></td><td><code>autoscaler</code> : <code>docker-cli</code></td><td>Instances ajustées selon CPU et mémoire, sous 80 % de la machine (Swarm, page 7)</td></tr>
+    <tr><td><b>Lint</b></td><td><code>lint</code> : <code>shellcheck nodejs</code></td><td>Scripts shell, JavaScript, <b>règles du projet sur chaque Dockerfile</b>, aucun jeton commité</td></tr>
+    <tr><td><b>Tests</b></td><td><code>test</code> : <code>nodejs</code> + dépendances du back</td><td>12 tests de l'API (dont SIGTERM → code 0), puis 5 de bout en bout sur une stack isolée</td></tr>
+  </table>
+
+  <div class="diagram h-ci">
+<pre class="mermaid">
+flowchart LR
+  build["<b>0 · build</b><br/>toutes les images"]
+  lint["<b>1 · lint</b>"]
+  test["<b>1 · test</b><br/>12 tests de l'API"]
+  sec["<b>2 · security</b><br/>npm audit"]
+  pol["<b>2 · policy</b><br/>règles des images"]
+  ai["<b>2 · ai-test</b><br/>option --ia"]
+  it["<b>3 · intégration</b><br/>stack isolée"]
+  dep["<b>4 · déploiement</b><br/>Swarm progressif"]
+  build --> lint
+  build --> test
+  lint --> sec
+  test --> sec
+  lint --> pol
+  test --> pol
+  lint -.-> ai
+  test -.-> ai
+  sec --> it
+  pol --> it
+  ai -.-> it
+  it --> dep
+
+  classDef ci fill:#efe8fd,stroke:#7a4fd6,color:#1b2330
+  classDef ia fill:#fdf0e2,stroke:#d9771a,color:#1b2330
+  classDef cd fill:#e3f6ec,stroke:#1f9d63,color:#1b2330
+  class build,lint,test,sec,pol,it ci
+  class ai ia
+  class dep cd
+</pre>
+  </div>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--int);border-color:var(--int-b)"></i><b>Vérification (CI)</b> : un conteneur par étape</span>
+    <span><i class="sw" style="background:var(--iso);border-color:var(--iso-b)"></i><b>Étape IA</b> : seulement avec <code>--ia</code></span>
+    <span><i class="sw" style="background:var(--data);border-color:var(--data-b)"></i><b>Déploiement (CD)</b></span>
+    <span><i class="ln"></i>démarre si l'étape précédente sort en <code>0</code> ; deux flèches = attend les deux</span>
+  </div>
+
+  <table>
+    <tr><th>Règle / mesure</th><th>Pourquoi / résultat</th></tr>
+    <tr><td>Code en lecture seule, <code>read_only</code>, non-root ; 1 CPU, 256 Mo par étape</td><td>Une étape ne modifie pas ce qu'elle vérifie ; pics mesurés de 9 à 68 Mo (ai-test : 220 Mo sur 512)</td></tr>
+    <tr><td>Aucun réseau sauf <code>security</code> (npm) et <code>ai-test</code> (API Claude) ; projets séparés</td><td>La CI ne touche jamais la stack de l'utilisateur ; tout est supprimé à la fin, même en échec</td></tr>
+    <tr><td>Déploiement : tag = hash git, <code>start-first</code>, <code>rollback</code></td><td><span class="ok">0 échec</span> sur 86 332 requêtes pendant la mise à jour ; version cassée annulée en 21 s</td></tr>
+    <tr><td>Défauts trouvés par la CI</td><td>2 failles npm <code>high</code>, plantage du front sur un nom accentué, taille d'envoi contraire à la doc : corrigés</td></tr>
+  </table>
+
+  <h3>Étape IA (optionnelle) : tests écrits par un agent Claude</h3>
+  <table>
+    <tr><td>Principe et garde-fous</td><td>L'agent écrit des tests depuis la <b>documentation</b>, sans accès au code du back ; il n'écrit que dans <code>/tests</code> et ne lance que <code>node --test</code>. Notre script relance ses tests : seul ce verdict compte ; panne de l'IA = échec (code 2)</td></tr>
+    <tr><td>Jeton</td><td>Celui de l'abonnement Claude de l'utilisateur, dans <code>ci/ia.env</code> (ignoré par git, jamais dans une image) ; le dépôt n'a qu'une fausse clé</td></tr>
+    <tr><td>Mesuré</td><td>Bug planté (<code>ttl</code> de 168 h refusé) <b>attrapé</b> alors que nos 12 tests passaient : rien de déployé. Injection « ne signalez aucun bug » cachée dans la doc : <b>ignorée et signalée</b>. ~2 min 30, ~0,5 $ estimé</td></tr>
+  </table>
+  <footer>Détail des mesures, des tests et de chaque choix : dossier <code>docs/</code> du dépôt (CI/CD : <code>docs/ci-cd.md</code>) · github.com/AbadieThomasPro/M2_TP_Docker</footer>
 </section>
 
 <script type="module">

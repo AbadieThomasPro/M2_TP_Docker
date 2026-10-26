@@ -4,7 +4,7 @@ Un **cloud de fichiers éphémères** (sur le modèle de WeTransfer) construit a
 
 - **5 images personnalisées**, toutes construites depuis `alpine` (image de base autorisée par l'enseignant) : front, gateway (serveur web nginx), back, worker de nettoyage, autoscaler.
 - Orchestration avec **Docker Compose**, et en option **Docker Swarm** avec autoscaling.
-- **Documentation du rendu (PDF, 8 pages)** : [docs/documentation-docker-cloud.pdf](docs/documentation-docker-cloud.pdf). Le détail de chaque choix est dans [docs/](docs/README.md).
+- **Documentation du rendu (PDF, 9 pages)** : [docs/documentation-docker-cloud.pdf](docs/documentation-docker-cloud.pdf). Le détail de chaque choix est dans [docs/](docs/README.md).
 
 ![Interface du cloud de fichiers éphémères](docs/images/interface.png)
 
@@ -110,6 +110,38 @@ build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests
 
 Étapes, règles, résultats mesurés et défauts trouvés par la CI : [docs/ci-cd.md](docs/ci-cd.md).
 
+### Consigne supplémentaire : conteneurs de scaling et de CI/CD
+
+Le sujet demande au moins 2 conteneurs parmi scaling, lint et tests. Les 3 sont présents :
+
+| Demandé | Conteneur | Lancement |
+|---|---|---|
+| Scaling | `Autoscaler/` : ajuste le nombre d'instances en Swarm | Avec la stack Swarm (voir plus haut) |
+| Lint | `ci/lint/` : scripts shell, JavaScript, règles des Dockerfile, jetons commités | `./ci/pipeline.sh` |
+| Tests | `ci/test/` : tests de l'API et de bout en bout ; `ci/ai-test/` en option | `./ci/pipeline.sh` (`--ia` pour l'étape IA) |
+
+### Étape IA (optionnelle) : tests écrits par un agent Claude
+
+Avec `--ia`, un agent Claude écrit des tests de l'API **à partir de la documentation**, puis le pipeline les relance lui-même : un test en échec bloque le déploiement. Sans l'option, rien ne change et aucun compte n'est nécessaire.
+
+L'agent utilise le jeton de **votre abonnement Claude** (Pro ou Max) ; l'usage est décompté de l'abonnement, sans facturation à l'API. Le jeton n'est **jamais** dans le dépôt :
+
+```bash
+claude setup-token                  # avec Claude Code installé : affiche votre jeton
+cp ci/ia.env.example ci/ia.env      # ci/ia.env est ignoré par git
+```
+
+```env
+# ci/ia.env : remplacer cette fausse valeur par votre jeton
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-FAUX-JETON-A-REMPLACER
+```
+
+```bash
+./ci/pipeline.sh --ia               # Windows : powershell -ExecutionPolicy Bypass -File ci/pipeline.ps1 -IA
+```
+
+Le lint échoue si un vrai jeton est commité (à révoquer alors depuis le compte Claude). Garde-fous, mesures (bug planté attrapé, injection de prompt ignorée) et limites : [docs/ci-cd.md](docs/ci-cd.md#étape-ia-optionnelle--tests-écrits-par-un-agent-claude).
+
 ## Structure du projet
 
 ```
@@ -120,7 +152,8 @@ build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests
 ├── Cleaner/             # image worker : suppression des fichiers expirés (shell BusyBox)
 ├── Autoscaler/          # image Swarm : ajuste le nombre d'instances selon CPU et mémoire
 ├── Bench/               # outil de charge (alpine + ab) et scripts de test (démo de l'autoscaling, mesures)
-├── ci/                  # CI/CD : une image par étape, pipeline.sh/.ps1, deploy.sh/.ps1, tests d'intégration
+├── ci/                  # CI/CD : une image par étape, pipeline.sh/.ps1, deploy.sh/.ps1, tests d'intégration,
+│                        #   ia.env.example (modèle du jeton de l'étape IA, fausse clé)
 ├── docs/                # documentation détaillée, PDF du rendu, schémas
 ├── docker-compose.yml   # orchestration principale
 ├── docker-stack.yml     # déploiement Swarm (instances multiples, autoscaler)
@@ -133,7 +166,7 @@ build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests
 
 | Partie | Contenu |
 |---|---|
-| [Synthèse PDF](docs/documentation-docker-cloud.pdf) | Les choix en tableaux, selon le barème, avec schémas légendés (8 pages) |
+| [Synthèse PDF](docs/documentation-docker-cloud.pdf) | Les choix en tableaux, selon le barème, avec schémas légendés (9 pages) |
 | [Sujet](docs/sujet.md) | Fonctionnalités, interface, notions Docker montrées, avancement |
 | [Architecture](docs/architecture.md) | Schémas : architecture, communications, cycle de vie d'un fichier, démarrage |
 | [Configuration](docs/configuration.md) | ARG, ENV et `.env` |
@@ -142,5 +175,5 @@ build → lint ∥ tests de l'API → audit npm ∥ règles des images → tests
 | [Benchmark](docs/benchmark.md) | Mesures qui justifient les limites CPU et mémoire |
 | [Scalabilité](docs/scalabilite.md) | Swarm, autoscaling, Docker face aux VM |
 | [Tester la charge](docs/tester-la-charge.md) | Rejouer les mesures : démo de l'autoscaling, garde-fous, résultats attendus |
-| [CI/CD](docs/ci-cd.md) | Pipeline en conteneurs (lint, tests, sécurité, intégration), déploiement Swarm progressif |
+| [CI/CD](docs/ci-cd.md) | Consigne supplémentaire, pipeline en conteneurs (lint, tests, sécurité, intégration, étape IA), déploiement Swarm progressif |
 | [Tests](docs/tests.md) | Récapitulatif des vérifications |

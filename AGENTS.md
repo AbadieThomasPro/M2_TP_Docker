@@ -102,7 +102,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - **Documentation détaillée dans `docs/`**, un fichier par partie (index : `docs/README.md`) : `sujet.md`, `architecture.md`, `configuration.md`, `conteneurs/{points-communs,frontend,gateway,backend,cleaner,autoscaler}.md` (pages des images Docker), captures et schémas exportés dans `docs/images/`, `orchestration.md`, `benchmark.md`, `scalabilite.md`, `tests.md`. Chaque fichier commence par les liens « Retour au README · Documentation ». Les fichiers d'image gardent le même plan. Toute nouvelle partie est ajoutée à l'index et au tableau du README ; les liens relatifs et les ancres sont vérifiés (aucun lien cassé).
 - Chaque changement d'image ou du compose met à jour le fichier `docs/` concerné (tableaux ARG / ENV, dépendances, manipulations OS, entrypoints, ressources) ; le README seulement si les commandes ou le `.env` d'exemple changent.
 - Toute modification d'architecture (service, réseau, port, volume, `depends_on`, ressources) met à jour les **schémas Mermaid** (`docs/architecture.md`, `docs/scalabilite.md`) et régénère `docs/images/architecture.png`. Vérifier le rendu avant de livrer (une erreur de syntaxe Mermaid casse l'affichage sur GitHub).
-- **PDF du rendu** (`docs/documentation-docker-cloud.pdf`, 8 pages) : sa source est `docs/documentation/documentation.html` (mêmes schémas Mermaid que le README, valeurs du `.env`). Toute modification d'architecture, d'image, de ressources ou de mesure s'y reporte, puis `powershell -ExecutionPolicy Bypass -File docs/documentation/generer-pdf.ps1` (Edge headless + serveur local temporaire ; le PDF doit être fermé dans tout lecteur). Vérifier : 8 pages, aucun « Syntax error », schémas non coupés. Style : tableaux, phrases courtes, chaque ligne donne le pourquoi.
+- **PDF du rendu** (`docs/documentation-docker-cloud.pdf`, 9 pages, page 9 = CI/CD et consigne supplémentaire) : sa source est `docs/documentation/documentation.html` (mêmes schémas Mermaid que le README, valeurs du `.env`). Toute modification d'architecture, d'image, de ressources ou de mesure s'y reporte, puis `powershell -ExecutionPolicy Bypass -File docs/documentation/generer-pdf.ps1` (Edge headless + serveur local temporaire ; le PDF doit être fermé dans tout lecteur). Vérifier : 9 pages, aucun « Syntax error », schémas non coupés. Style : tableaux, phrases courtes, chaque ligne donne le pourquoi.
 - Les résultats de test (temps d'arrêt, mesures `docker stats`, codes HTTP) sont notés dans `docs/` quand ils justifient un choix.
 
 ### Git
@@ -170,6 +170,14 @@ docker swarm leave --force   # quitte le mode Swarm : tous les services et toute
 - **Le code de sortie est le contrat** : toute étape qui échoue arrête le pipeline, rien n'est déployé. Ne jamais contourner une étape rouge (pas de `|| true`, pas de seuil d'audit relevé pour « faire passer ») : corriger la cause.
 - Toute nouvelle règle du projet vérifiable automatiquement va dans `lint.sh` (Dockerfile) ou `policy.sh` (images construites). Tout nouveau script `.sh` doit passer shellcheck (niveau warning).
 - Tests : `Backend/test/` (unitaires, `node --test`, aucune dépendance) et `ci/test/integration/` (bout en bout). Exclus des images livrées.
+
+### Étape IA (`ci/ai-test`, option `--ia` / `-IA`)
+
+- **Le jeton Claude n'est jamais dans le dépôt**, ni dans une image, un rapport, un journal ou un message : seul emplacement `ci/ia.env` (ignoré par git). Le dépôt et la doc ne montrent que la fausse clé `sk-ant-oat01-FAUX-JETON-A-REMPLACER`. Le lint bloque tout jeton réel : ne jamais l'affaiblir ni y exclure un autre fichier.
+- Ne jamais afficher `ci/ia.env`, ni `docker compose --profile ia config` (il résout et affiche le jeton), ni l'environnement du conteneur `ai-test`.
+- Chaque exécution consomme la limite d'abonnement de l'utilisateur (~0,5 $ estimé, 2 à 3 min) : **ne lancer `--ia` que sur demande**, jamais pour tester autre chose (sans `ci/ia.env`, l'étape échoue en code 2 sans rien consommer). `CI_IA_BUDGET_USD` et `CI_IA_MAX_TURNS` ne se relèvent pas pour « faire passer ».
+- L'agent ne lit que la documentation (`docs/`, `README.md`, `.env`), jamais `Backend/src/` : c'est ce qui lui permet de trouver un écart entre le code et la doc. Le verdict vient du passage indépendant (`node --test` relancé par `ai-test.mjs`), pas de l'agent.
+- Un bug signalé par l'étape : vérifier d'abord la doc (référence), puis corriger le code **ou** la doc ; un test généré utile est promu dans `Backend/test/`.
 - Les scripts nettoient toujours (`trap` / `finally`) : 0 conteneur, volume ou réseau `docker-cloud-ci` / `docker-cloud-it` après une exécution, réussie ou non.
 
 ## Pièges connus (poste Windows)
