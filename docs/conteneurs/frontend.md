@@ -55,7 +55,7 @@ Stage final   : alpine + nodejs + tini + tzdata + server.js ◀─────�
 | Stage `build` (`apk`) | `nodejs`, `npm` | Installer les paquets et compiler Angular | Restent dans le stage jetable. |
 | Stage `build` (npm) | Angular 22 (`@angular/core`, `common`, `compiler`, `platform-browser`, `build`, `cli`...), `rxjs`, `typescript` | Framework et outils de compilation | Projet allégé : sans `@angular/router` ni `@angular/forms` (une seule page, pas de formulaire complexe), sans outils de test. |
 | Image finale (`apk`) | `nodejs` | Exécute `server.js`, qui sert le build et relaie `/api` | Seul le runtime est installé, sans `npm` : le serveur utilise uniquement les modules natifs `http`, `fs` et `path`, et l'application est déjà compilée. |
-| `tini` | Init minimal lancé en PID 1 | Transmet correctement les signaux (SIGTERM lors d'un `docker stop`) à Node et nettoie les processus zombies. Sans lui, Node en PID 1 peut ignorer SIGTERM et le conteneur est tué brutalement après 10 s. |
+| `tini` | Init minimal lancé en PID 1 | Transmet correctement les signaux (SIGTERM lors d'un `docker stop`) à Node et nettoie les processus zombies. Sans lui, Node en PID 1 peut ignorer SIGTERM et le conteneur est tué brutalement (SIGKILL, code `137`) à la fin du délai d'arrêt : 1 s par défaut sous Docker 29, 10 s avec le `stop_grace_period` du compose. |
 | `tzdata` | Base des fuseaux horaires | Permet d'avoir l'heure de Paris (`TZ=Europe/Paris`) dans les logs au lieu de l'UTC. |
 
 `wget`, utilisé par le healthcheck, est déjà fourni par BusyBox dans Alpine : rien à installer.
@@ -119,7 +119,7 @@ CMD ["node", "server.js"]
 - **`CMD` séparée de l'`ENTRYPOINT`** : on peut la remplacer au run (`docker run front node -v`) tout en gardant `tini`.
 - **Dans `server.js`** : à la réception de SIGTERM, le serveur arrête d'accepter les connexions, termine celles en cours puis quitte avec le code 0.
 
-Résultat testé : un `docker stop` arrête le conteneur en moins d'une seconde, au lieu d'attendre le kill forcé à 10 s.
+Résultat testé : un `docker stop` arrête le conteneur en 0,8 s avec le code `0`, avant le SIGKILL qui tombe à la fin du délai d'arrêt (`stop_grace_period: 10s` dans le compose, 1 s par défaut sous Docker 29 : voir [Orchestration](../orchestration.md)).
 
 ## Build et run
 

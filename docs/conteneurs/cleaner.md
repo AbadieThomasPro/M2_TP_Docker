@@ -67,12 +67,12 @@ ENTRYPOINT ["/usr/local/bin/cleanup.sh"]
 
 Le script est lancé directement en **PID 1**, sans `tini`. Il gère lui-même SIGTERM avec un `trap`, et ne laisse pas de processus enfant derrière lui.
 
-Arrêter un worker qui supprime des fichiers est le cas typique où SIGTERM compte : il ne doit être ni tué au bout des 10 s (code `137`), ni laisser un état incohérent. La mise au point a demandé plusieurs essais, tous mesurés sur 10 000 fichiers expirés :
+Arrêter un worker qui supprime des fichiers est le cas typique où SIGTERM compte : il ne doit être ni tué à la fin du délai d'arrêt (`stop_grace_period: 10s`, code `137`), ni laisser un état incohérent. La mise au point a demandé plusieurs essais, tous mesurés sur 10 000 fichiers expirés :
 
 | Version | Problème mesuré | Correction |
 |---|---|---|
 | 1. Un `rm` par fichier | 10 000 processus : la passe n'était pas finie au bout de 45 s avec 0,1 CPU | Suppression **par lots** avec `xargs` (des centaines de noms par appel à `rm`) : 6 s. |
-| 2. `xargs` lancé au premier plan | Le shell n'exécute un `trap` qu'à la fin de la commande en cours : avec peu de CPU, la passe dépassait 10 s → **code `137`** | Suppression lancée **en arrière-plan** + `wait`, qui est interrompu immédiatement par le signal. |
+| 2. `xargs` lancé au premier plan | Le shell n'exécute un `trap` qu'à la fin de la commande en cours : avec peu de CPU, la passe dépassait le délai d'arrêt de 10 s → **code `137`** | Suppression lancée **en arrière-plan** + `wait`, qui est interrompu immédiatement par le signal. |
 | 3. `kill` du processus de suppression | Ses enfants (`awk`, `xargs`, `rm`) continuaient | Suppression lancée avec **`setsid`**, dans son propre groupe de processus : le trap arrête tout le groupe d'un coup (`kill -TERM -<pgid>`). |
 | 4. Signal reçu pendant le comptage initial | La suppression était quand même lancée → `137` avec 0,05 CPU | Le drapeau d'arrêt est vérifié **avant** de lancer la suppression. |
 | 5. `kill $!` en fin de script | Sans attente lancée, `$!` n'existe pas et `set -u` faisait sortir avec le code `2` | PID du `sleep` mémorisé dans une variable, testée avant le `kill`. |

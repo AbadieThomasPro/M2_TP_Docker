@@ -117,7 +117,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - **Code de sortie à l'arrêt = `0`** pour chaque conteneur (`docker compose stop`, puis `docker inspect -f '{{.State.ExitCode}}' <conteneur>`) :
   - `0` ✅ : le signal a été reçu et traité, arrêt propre ;
   - `1` ❌ : l'application s'est arrêtée sur une erreur ;
-  - `137` ❌ (128 + 9 = SIGKILL) : le signal d'arrêt a été ignoré, Docker a tué le conteneur au bout des 10 s.
+  - `137` ❌ (128 + 9 = SIGKILL) : le signal d'arrêt a été ignoré, Docker a tué le conteneur à la fin du `stop_grace_period` (10 s ; 1 s par défaut sous Docker 29 sans ce réglage).
 - Nettoyage : `docker compose down` + suppression des images de test.
 - **Pipeline complet** : `powershell -ExecutionPolicy Bypass -File ci/pipeline.ps1 -SansDeploiement` doit être vert (ou sans l'option pour déployer sur Swarm).
 
@@ -138,6 +138,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - Déploiement : `docker swarm init` (une fois), puis `swarm-deploy.ps1` / `swarm-deploy.sh` (construit les images, **charge le `.env`**, que `docker stack deploy` ne lit pas, puis déploie). Retrait : `docker stack rm cloud`.
 - **Toute modification d'un service (variable, ressource, réseau, volume) se fait dans les deux fichiers** et se vérifie dans les deux modes. La stack Swarm et le compose publient tous deux le port 8080 : jamais les deux en même temps.
 - En Swarm, front et gateway ont plus de CPU (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) : ils relaient 3 back (rapport de coûts mesuré 7 / 3 / 1). Réservations CPU et plafond `BACK_MAX_REPLICAS_PER_NODE` = garde-fous contre une multiplication des instances.
+- `restart_policy: condition: any`, jamais `on-failure` : nos services sortent en `0` sur SIGTERM, et `on-failure` ne relance pas une tâche sortie en `0` (autoscaler resté à 0/1 après un redémarrage de Docker).
 - Un seul `cleaner`, toujours. L'image du cleaner initialise aussi le dossier du volume (pas d'ordre de démarrage en Swarm).
 - Bench en Swarm : `ab` lancé comme service ponctuel sur `cloud_public` (pas via `host.docker.internal`, non comparable et instable sous forte charge).
 

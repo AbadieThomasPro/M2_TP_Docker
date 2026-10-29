@@ -83,7 +83,7 @@ Les healthchecks sont définis dans les Dockerfile de chaque image. L'ordre de d
 - **Le signal est défini à un seul endroit, l'image** : aucun `stop_signal` dans le compose ni dans la stack Swarm. Chaque application traite elle-même le signal (`tini` + `process.on('SIGTERM')`, `trap` dans les scripts, `STOPSIGNAL SIGQUIT` pour nginx).
 - **Le délai avant SIGKILL relève de l'orchestration** : `stop_grace_period: 10s` sur chaque service. Il n'est pas redondant : sans lui, Docker 29 tue au bout d'**1 s** (mesuré : un conteneur qui ignore SIGTERM sort en `137` après 1,4 s), à peine au-dessus de nos temps d'arrêt.
 - Tous les services s'arrêtent proprement bien avant ce délai : l'arrêt complet mesuré prend moins de 2 secondes.
-- **Code de sortie vérifié** (`docker inspect -f '{{.State.ExitCode}}'`) : `0` signifie que le signal a été traité et l'arrêt propre, `1` une erreur de l'application, `137` (128 + 9) un SIGKILL après les 10 s, donc un signal ignoré.
+- **Code de sortie vérifié** (`docker inspect -f '{{.State.ExitCode}}'`) : `0` signifie que le signal a été traité et l'arrêt propre, `1` une erreur de l'application, `137` (128 + 9) un SIGKILL à la fin du `stop_grace_period`, donc un signal ignoré.
 
 | Service | Temps d'arrêt mesuré | Code de sortie |
 |---|---|---|

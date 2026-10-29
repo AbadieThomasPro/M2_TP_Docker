@@ -30,7 +30,7 @@ L'application reste sur **http://127.0.0.1:8080**. La stack Swarm et le compose 
 | `memswap_limit` | **Refusé** (« forbidden property ») | Absent : la limite mémoire est appliquée, mais la swap n'est plus désactivée (limite assumée). |
 | `build:` | Ignoré | Les images sont construites par `docker compose build` (dans le script), puis utilisées par Swarm (`image: docker-cloud/*`). |
 | `network_mode: none` (cleaner) | Ignoré : le cleaner aurait été branché sur un réseau par défaut, avec Internet | Réseau overlay **`isole`**, `internal: true`, dont le cleaner est le seul membre (vérifié : aucun accès au back ni à Internet). |
-| `restart: unless-stopped` | Ignoré | `deploy.restart_policy: on-failure`. |
+| `restart: unless-stopped` | Ignoré | `deploy.restart_policy: any` (voir ci-dessous). |
 | `tmpfs: - /tmp:size=8m` | Forme courte non prise en charge | Forme longue `type: tmpfs` avec une taille en octets. |
 | `.env` | **Non lu** par `docker stack deploy` | Le script `swarm-deploy.ps1` / `.sh` charge le `.env` dans l'environnement avant de déployer. |
 
@@ -44,7 +44,7 @@ Un fichier de **surcharge** (compose + petit fichier de différences) a été es
 | `deploy.labels` `autoscale.*` sur back, gateway, front | Les services que l'autoscaler peut multiplier, et leurs bornes (back 2 à 6, gateway 1 à 3, front 1 à 2). |
 | Service `autoscaler` | 1 instance sur le manager, socket Docker monté (voir [Image Autoscaler](conteneurs/autoscaler.md#image-autoscaler-mode-swarm)). |
 | `cleaner.deploy.replicas: 1` | **Toujours un seul** worker, quel que soit le nombre de back : plusieurs supprimeraient les mêmes fichiers en même temps. |
-| `restart_policy: on-failure` | Auto-réparation : une instance qui tombe est recréée. |
+| `restart_policy: any` | Auto-réparation : une instance qui s'arrête est recréée. `any` et non `on-failure` : nos services sortent en `0` sur SIGTERM (arrêt propre), et Swarm ne relance pas une tâche sortie en `0`. Constaté avec `on-failure` : après un redémarrage de Docker, l'autoscaler restait à `0/1`. |
 | `update_config: parallelism 1, order start-first, failure_action rollback` | Mise à jour progressive : une instance à la fois, la nouvelle doit être `healthy` avant l'arrêt de l'ancienne, retour arrière automatique en cas d'échec. |
 | Réseaux `driver: overlay` | Le type de réseau de Swarm, qui peut s'étendre sur plusieurs machines. Les mêmes réseaux que le compose (`public`, `interne-front`, `interne-back`), plus `isole`. |
 | Front et gateway à **0,75 et 0,30 CPU** (`SWARM_FRONT_CPUS`, `SWARM_GATEWAY_CPUS`) | Plus que dans le compose (0,25 et 0,10), parce qu'ils relaient le trafic de plusieurs back : voir le benchmark ci-dessous. |
@@ -164,7 +164,7 @@ L'exemple du cours (`autoscale.sh` + `Dockerfile.autoscaler`) donne le principe 
 | CPU seulement | La gateway risque l'OOM avant la saturation CPU. | CPU **et** mémoire. |
 | Aucune limite globale | Rien n'empêche de saturer la machine. | Budget de **80 %** de la machine. |
 | `bash`, `curl`, `alpine:3.18`, root, pas de limites | Outils inutiles, version en fin de vie, aucun durcissement. | Alpine 3.22, `docker-cli` seul, non-root, lecture seule, 0,10 CPU / 64 Mo. |
-| `sleep` au premier plan, pas de `trap` | `docker stop` attend 10 s puis tue le conteneur (code `137`). | `trap` + `sleep & wait` : arrêt en 0,6 s, code `0`. |
+| `sleep` au premier plan, pas de `trap` | `docker stop` attend la fin du délai d'arrêt (`stop_grace_period: 10s`) puis tue le conteneur (code `137`). | `trap` + `sleep & wait` : arrêt en 0,6 s, code `0`. |
 
 ### Démonstrations (mesurées)
 

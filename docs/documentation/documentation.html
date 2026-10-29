@@ -404,7 +404,7 @@ flowchart TB
 
 <!-- ===================== PAGE 8 : RESULTATS ===================== -->
 <section class="page">
-  <h2>Résultats mesurés et Docker face aux VM <span class="crit">Objectif pédagogique</span></h2>
+  <h2>Résultats mesurés</h2>
 
   <h3>Ce qui a été vérifié</h3>
   <table>
@@ -418,16 +418,6 @@ flowchart TB
     <tr><td>Auto-réparation (instance tuée)</td><td>Recréée en 13 s, <span class="ok">0 erreur</span> sur 179 requêtes</td></tr>
     <tr><td>Mise à jour progressive</td><td><span class="ok">0 erreur</span> sur 520 requêtes</td></tr>
     <tr><td>Arrêt de chaque service</td><td>Moins d'1 s, code <span class="ok">0</span></td></tr>
-  </table>
-
-  <h3>Docker face aux machines virtuelles (mesuré sur cette stack)</h3>
-  <table>
-    <tr><th></th><th>Machines virtuelles</th><th>Conteneurs Docker</th></tr>
-    <tr><td>Ajouter une instance</td><td>Une VM complète : minutes, plusieurs Go</td><td>2 instances de plus en 17 s, ~27 Mo de RAM chacune</td></tr>
-    <tr><td>Instance en panne</td><td>Intervention ou outillage dédié</td><td>Relancée seule en 13 s</td></tr>
-    <tr><td>Mise à jour</td><td>Arrêt de service ou bascule manuelle</td><td>Remplacement progressif, 0 erreur</td></tr>
-    <tr><td>Empreinte</td><td>Un OS complet par VM</td><td>~100 Mo de RAM au repos pour toute l'application</td></tr>
-    <tr><td>Configuration</td><td>À reproduire sur chaque VM</td><td>Identique partout : même image, même <code>.env</code></td></tr>
   </table>
 
   <h3>Limites connues</h3>

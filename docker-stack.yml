@@ -59,9 +59,10 @@ services:
         reservations:
           cpus: "${BACK_CPUS_RESERVATION}"
           memory: ${BACK_MEMORY_RESERVATION}
-      # Remplace "restart: unless-stopped", ignoré par Swarm : une tâche qui échoue est recréée
+      # Remplace "restart: unless-stopped", ignoré par Swarm. "any" et non "on-failure" : nos services sortent
+      # en 0 sur SIGTERM (redémarrage de Docker), et Swarm ne relancerait pas une tâche "terminée" (0/1 constaté)
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 2s
       # Mise à jour progressive : une tâche à la fois, la nouvelle doit être healthy avant l'arrêt
       # de l'ancienne (start-first), donc aucune coupure ; retour arrière automatique en cas d'échec.
@@ -104,7 +105,7 @@ services:
           cpus: "${CLEANER_CPUS_RESERVATION}"
           memory: ${CLEANER_MEMORY_RESERVATION}
       restart_policy:
-        condition: on-failure
+        condition: any   # comme le back
         delay: 2s
       # stop-first (et non start-first) : l'ancien worker s'arrête avant que le nouveau démarre,
       # il n'y en a jamais deux à la fois. Retour arrière si la nouvelle version ne tient pas
@@ -156,7 +157,7 @@ services:
           cpus: "${GATEWAY_CPUS_RESERVATION}"
           memory: ${GATEWAY_MEMORY_RESERVATION}
       restart_policy:
-        condition: on-failure
+        condition: any   # comme le back
         delay: 2s
       update_config:
         order: start-first
@@ -199,7 +200,7 @@ services:
           cpus: "${FRONT_CPUS_RESERVATION}"
           memory: ${FRONT_MEMORY_RESERVATION}
       restart_policy:
-        condition: on-failure
+        condition: any   # comme le back
         delay: 2s
       update_config:
         order: start-first
@@ -252,9 +253,10 @@ services:
         reservations:
           cpus: "${AUTOSCALER_CPUS_RESERVATION}"
           memory: ${AUTOSCALER_MEMORY_RESERVATION}
-      # Il sort en erreur si le socket est inaccessible : Swarm le relance, avec un délai pour ne pas boucler
+      # Relancé quelle que soit la sortie (0 sur SIGTERM, erreur si le socket est inaccessible), avec un délai
+      # pour ne pas boucler : "on-failure" le laissait à 0/1 après un redémarrage de Docker (constaté)
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 10s
       # stop-first : jamais deux autoscalers en même temps (décisions contradictoires)
       update_config:
