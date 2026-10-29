@@ -327,7 +327,7 @@ sequenceDiagram
     <tr><td>cleaner</td><td><code>trap</code> ; suppression en arrière-plan + <code>wait</code>, groupe <code>setsid</code> arrêté d'un coup ; chaque suppression est atomique</td><td>0,5 à 0,6 s en pleine passe (10 000 fichiers)</td><td class="ok">0</td></tr>
     <tr><td>autoscaler</td><td><code>trap</code> ; relevé et <code>sleep</code> en arrière-plan + <code>wait</code></td><td>0,6 s</td><td class="ok">0</td></tr>
   </table>
-  <p class="note"><code>0</code> = signal traité ; <code>137</code> = signal ignoré, tué au bout des 10 s par défaut de Docker. Signal défini dans l'image seulement : aucun <code>stop_signal</code> ni <code>stop_grace_period</code> dans le compose ou la stack. Vérifié avec <code>docker inspect -f '{{.State.ExitCode}}'</code>.</p>
+  <p class="note"><code>0</code> = signal traité ; <code>137</code> = signal ignoré, tué au bout de <code>stop_grace_period: 10s</code>. Le signal est défini dans l'image seulement (aucun <code>stop_signal</code> dans le compose ou la stack) ; le compose ne fixe que ce délai, car sans lui Docker 29 tue au bout d'1 s (mesuré). Vérifié avec <code>docker inspect -f '{{.State.ExitCode}}'</code>.</p>
 </section>
 
 <!-- ===================== PAGE 7 : SWARM ET AUTOSCALING ===================== -->

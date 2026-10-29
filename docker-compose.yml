@@ -42,8 +42,10 @@ services:
     # Système de fichiers de l'image en lecture seule : en cas de faille, impossible de modifier le code
     # ou de déposer un binaire. Le back n'écrit que dans le volume (envois compris, via .incoming/)
     read_only: true
-    # Arrêt : pas de stop_signal ni de stop_grace_period ici. Le signal est l'affaire de l'image (SIGTERM par
-    # défaut, STOPSIGNAL dans le Dockerfile de la gateway) et le délai de 10 s de Docker suffit (arrêt mesuré < 1 s)
+    # Arrêt : le SIGNAL est défini par l'image seulement (SIGTERM par défaut, STOPSIGNAL de la gateway), jamais
+    # ici. Le compose ne fixe que le DÉLAI avant SIGKILL : sans lui, Docker 29 tue au bout d'1 s (mesuré), à peine
+    # au-dessus de nos arrêts (0,5 à 0,7 s). 10 s laissent de la marge sur une machine plus lente
+    stop_grace_period: 10s
     # Relance après un crash, mais respecte un arrêt volontaire
     restart: unless-stopped
     # Uniquement le réseau de la gateway : le back n'est joignable ni de l'extérieur ni par le front
@@ -85,6 +87,8 @@ services:
     # /tmp en RAM et minuscule : il ne contient que le heartbeat, et compte dans la mémoire du conteneur
     tmpfs:
       - /tmp:size=1m
+    # Délai avant SIGKILL, comme le back : le worker finit la suppression en cours (0,6 s mesurés en pleine passe)
+    stop_grace_period: 10s
     restart: unless-stopped
 
   gateway:
@@ -124,6 +128,7 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
+    stop_grace_period: 10s   # délai seulement : le signal (SIGQUIT) vient du Dockerfile
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
     networks:
@@ -164,6 +169,7 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
+    stop_grace_period: 10s   # délai avant SIGKILL, comme le back
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
     networks:
