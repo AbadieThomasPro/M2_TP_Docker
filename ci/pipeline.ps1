@@ -24,6 +24,9 @@ param(
 Set-Location (Split-Path $PSScriptRoot -Parent)
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
+# Le .env n'est pas versionné : échec immédiat et explicite plutôt que des étapes aux réglages vides
+if (-not (Test-Path .env)) { Write-Host "❌ .env absent : le créer avec  cp .env.example .env"; exit 2 }
+
 $ci = @("compose", "-f", "ci/compose.yml", "--env-file", ".env")
 if ($IA) {
   # Échec franc et immédiat sans jeton : demander l'IA et ne pas l'avoir n'est jamais un succès

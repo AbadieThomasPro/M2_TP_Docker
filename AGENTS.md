@@ -31,7 +31,7 @@ Le front ne peut **pas** joindre le back en direct : la gateway est le seul pont
 | `docker-compose.yml` | – | Orchestration : réseaux `public` / `interne-front` / `interne-back`, volume `stockage`, ressources, healthchecks, ordre back → gateway → front. |
 | `Cleaner/` | alpine **sans paquet** (BusyBox) | Worker : supprime les fichiers expirés (expiration lue dans le nom) et les `.part` abandonnés. `network_mode: none`, `read_only` + `tmpfs /tmp`, volume partagé avec le back via le groupe `stockage`. Script PID 1 : SIGTERM arrête le groupe de suppression (`setsid`) puis sort en `0`. |
 | `Bench/` | alpine + apache2-utils (`ab`) | Outil de charge **versionné** (rejouable par le prof, voir `docs/tester-la-charge.md`). Service `bench` du compose dans le profil `bench` (ne démarre pas avec `up`). `run-autoscale-demo.sh` / `.ps1` (démo de l'autoscaler, tous systèmes), `run-bench.ps1` (compose), `run-swarm-bench.ps1` (Swarm, CPU en % de la limite). |
-| `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Versionné : aucun secret. |
+| `.env.example` → `.env` | – | Source unique des valeurs (versions, ports, CPU, mémoire, limites). Seul le modèle `.env.example` est versionné ; le `.env` (copie locale, `cp .env.example .env`) est dans le `.gitignore`. Mêmes variables dans les deux : vérifié par le lint. |
 | `questui-DESIGN.md` | – | Design system de l'interface (voir « Interface (design) »). |
 
 ## Commandes
@@ -88,7 +88,7 @@ Application : http://127.0.0.1:8080. Sur le poste de dev, `localhost:8080` peut 
 - **ARG** = build uniquement (`ALPINE_VERSION`, `PORT` → `EXPOSE` + défaut de `ENV PORT`).
 - **ENV** = valeurs par défaut dans l'image : l'image doit fonctionner seule, sans compose.
 - **`.env`** = valeurs du déploiement, injectées par le compose (`build.args` pour les ARG, `environment:` pour les ENV, `deploy.resources` / `ports`). Aucune valeur en dur dans le compose, sauf les noms de service (`back`, `gateway`).
-- Toute nouvelle variable : défaut en ENV + entrée commentée dans `.env` + passage dans le compose + ligne dans `docs/` (fichier de l'image concernée).
+- Toute nouvelle variable : défaut en ENV + entrée commentée dans **`.env.example`** (versionné) et dans le `.env` local (vérifié par le lint) + passage dans le compose + ligne dans `docs/` (fichier de l'image concernée).
 
 ### Interface (design)
 - L'interface du front suit le design system **[questui-DESIGN.md](questui-DESIGN.md)** (« QuestUI », thème RPG médiéval) : couleurs, typographie (Cinzel / Spectral / Fira Code), espacements, rayons, ombres dorées, composants (boutons, cartes, inputs, listes, chips) et leurs règles « Do / Don't ».

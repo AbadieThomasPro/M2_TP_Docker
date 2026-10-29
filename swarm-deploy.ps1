@@ -10,6 +10,9 @@
 #>
 Set-Location $PSScriptRoot
 
+# Le .env n'est pas versionné : sans lui, chaque valeur serait vide et les services recevraient des réglages faux
+if (-not (Test-Path .env)) { Write-Host ".env absent : le créer avec  cp .env.example .env"; exit 1 }
+
 if ((docker info --format '{{.Swarm.LocalNodeState}}') -ne 'active') {
   Write-Host "Swarm n'est pas actif. Activez-le une fois avec : docker swarm init"
   Write-Host "(réversible avec : docker swarm leave --force)"

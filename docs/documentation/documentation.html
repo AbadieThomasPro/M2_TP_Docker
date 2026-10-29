@@ -75,7 +75,7 @@
   </div>
 
   <div class="repo">Dépôt du projet : <a href="https://github.com/AbadieThomasPro/M2_TP_Docker">github.com/AbadieThomasPro/M2_TP_Docker</a><br>
-    <span class="note">Branche <code>main</code> · lancement : <code>docker compose up -d --build --wait</code> puis <code>http://127.0.0.1:8080</code></span></div>
+    <span class="note">Branche <code>main</code> : <code>cp .env.example .env</code> → <code>docker compose up -d --build --wait</code> → <code>127.0.0.1:8080</code></span></div>
 
   <div class="kpis">
     <div class="kpi"><b>5</b><small>images construites<br>depuis <code>alpine</code></small></div>
@@ -280,7 +280,7 @@ sequenceDiagram
     <tr><th>Niveau</th><th>Rôle</th><th>Traduction dans le compose</th></tr>
     <tr><td><b>ARG</b></td><td>Valeur figée au build : <code>ALPINE_VERSION</code>, <code>PORT</code> (→ <code>EXPOSE</code>), <code>STORAGE_GID</code>, <code>DOCKER_GID</code></td><td><code>build.args</code> ← <code>.env</code> seulement, jamais au run (sauf <code>PORT</code>, utile aux deux : même variable du <code>.env</code>)</td></tr>
     <tr><td><b>ENV</b></td><td>Défaut dans l'image : l'image démarre seule, sans compose</td><td><code>environment:</code> ← <code>.env</code> (changer une valeur = sans rebuild)</td></tr>
-    <tr><td><b>.env</b></td><td>Source unique de toutes les valeurs ; versionné (aucun secret)</td><td>Aucune valeur en dur dans le compose, sauf les noms de service</td></tr>
+    <tr><td><b>.env</b></td><td>Source unique de toutes les valeurs ; seul le modèle <code>.env.example</code> est versionné, le <code>.env</code> est copié en local</td><td>Aucune valeur en dur dans le compose, sauf les noms de service</td></tr>
   </table>
 
   <h3>Arguments attendus au run (principaux)</h3>

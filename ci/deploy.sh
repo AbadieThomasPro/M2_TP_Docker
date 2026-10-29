@@ -17,6 +17,9 @@ SERVICES="back gateway front cleaner autoscaler"
 # prend 2 à 3 ; au-delà, quelque chose est bloqué et le pipeline doit échouer plutôt qu'attendre
 TIMEOUT_S=${DEPLOY_TIMEOUT_S:-300}
 
+# Le .env n'est pas versionné : sans lui, la stack serait déployée avec des réglages vides
+[ -f .env ] || { echo ".env absent : le créer avec  cp .env.example .env"; exit 1; }
+
 if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
   echo "Swarm inactif : déploiement impossible (l'activer une fois avec docker swarm init)"
   exit 1

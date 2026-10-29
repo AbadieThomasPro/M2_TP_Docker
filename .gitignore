@@ -7,5 +7,7 @@ dist/
 *.log
 # Rapports de la CI (lint, JUnit, audit, policy) : régénérés à chaque exécution du pipeline
 ci/reports/
+# Configuration locale : créée par cp .env.example .env, jamais versionnée (seul le modèle l'est)
+.env
 # Jeton Claude personnel de l'étape IA : un secret, jamais versionné (modèle : ci/ia.env.example)
 ci/ia.env

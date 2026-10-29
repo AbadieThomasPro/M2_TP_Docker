@@ -17,9 +17,24 @@ Un **cloud de fichiers éphémères** (sur le modèle de WeTransfer) construit a
 
 ## Installation et lancement
 
+**1. Récupérer le projet**
+
 ```bash
 git clone https://github.com/AbadieThomasPro/M2_TP_Docker.git
 cd M2_TP_Docker
+```
+
+**2. Créer le `.env`** à partir du modèle versionné (copie de `.env.example` sous le nom `.env`) :
+
+```bash
+cp .env.example .env
+```
+
+Sous Windows PowerShell : `Copy-Item .env.example .env`. Sans ce fichier, le compose ne trouve aucune valeur et les scripts (`swarm-deploy`, `ci/pipeline`) s'arrêtent en le signalant.
+
+**3. Construire et lancer**
+
+```bash
 docker compose up -d --build --wait     # construit les 4 images puis attend que tout soit "healthy"
 ```
 
@@ -36,7 +51,7 @@ Ouvrir **http://127.0.0.1:8080** : déposer un fichier, choisir sa durée de vie
 
 ## Configuration : le fichier `.env`
 
-Le fichier [`.env`](.env) est **fourni** dans le dépôt (il ne contient aucun secret) : le projet se lance sans rien créer. Toutes les valeurs (versions, ports, durées de vie, quotas, CPU, mémoire) y sont réunies et commentées. Pour en changer une : modifier le `.env`, puis relancer `docker compose up -d --build`.
+Le dépôt fournit le modèle [`.env.example`](.env.example), copié en `.env` à l'installation. Le `.env` lui-même n'est **jamais versionné** (`.gitignore`) : chaque machine règle ses valeurs sans les commiter, et un secret ajouté un jour ne pourrait pas fuir. Toutes les valeurs (versions, ports, durées de vie, quotas, CPU, mémoire) y sont réunies et commentées ; celles du modèle sont les valeurs du projet, justifiées par les mesures. Pour en changer une : modifier le `.env`, puis relancer `docker compose up -d --build`. Le lint de la CI vérifie que le modèle et le `.env` ont les mêmes variables.
 
 Les variables les plus utiles :
 
@@ -158,7 +173,7 @@ Le lint échoue si un vrai jeton est commité (à révoquer alors depuis le comp
 ├── docker-compose.yml   # orchestration principale
 ├── docker-stack.yml     # déploiement Swarm (instances multiples, autoscaler)
 ├── swarm-deploy.ps1/.sh # charge le .env, construit les images, déploie la stack
-├── .env                 # toutes les valeurs de configuration (commentées)
+├── .env.example         # modèle de la configuration (commenté), à copier en .env (non versionné)
 └── AGENTS.md            # règles du projet (CLAUDE.md l'importe)
 ```
 

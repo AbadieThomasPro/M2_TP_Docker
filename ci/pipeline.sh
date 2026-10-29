@@ -27,6 +27,9 @@ for arg in "$@"; do
   esac
 done
 
+# Le .env n'est pas versionné : échec immédiat et explicite plutôt que des étapes aux réglages vides
+[ -f .env ] || { echo "❌ .env absent : le créer avec  cp .env.example .env"; exit 2; }
+
 CI="docker compose -f ci/compose.yml --env-file .env"
 if [ "$IA" -eq 1 ]; then
   # Échec franc et immédiat sans jeton : demander l'IA et ne pas l'avoir n'est jamais un succès

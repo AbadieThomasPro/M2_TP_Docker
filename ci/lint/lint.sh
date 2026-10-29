@@ -92,5 +92,28 @@ done < "$LIST"
 [ "$found" -eq 0 ] && say "OK      aucun jeton réel (ci/ia.env exclu : seul emplacement prévu, ignoré par git)"
 
 say ""
+say "== .env.example : mêmes variables que le .env local =="
+# Le .env n'est pas versionné : il est créé par copie du modèle. Une variable ajoutée à un seul des deux
+# serait livrée sans valeur ou jamais utilisée. Seuls les NOMS sont comparés : chacun règle ses valeurs.
+# \r retiré (fichiers édités sous Windows)
+noms() { tr -d '\r' < "$1" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' | cut -d= -f1 | sort; }
+if [ ! -f .env.example ]; then
+  say "ERREUR  .env.example absent"; rc=1
+elif [ ! -f .env ]; then
+  say "OK      .env.example présent (pas de .env local à comparer)"
+else
+  noms .env > /tmp/env-noms; noms .env.example > /tmp/exemple-noms
+  # comm plutôt que diff : diff de BusyBox ajoute des lignes de contexte qui noieraient l'écart
+  seul_env=$(comm -23 /tmp/env-noms /tmp/exemple-noms); seul_exemple=$(comm -13 /tmp/env-noms /tmp/exemple-noms)
+  if [ -z "$seul_env$seul_exemple" ]; then
+    say "OK      $(wc -l < /tmp/env-noms) variables, identiques dans les deux fichiers"
+  else
+    [ -n "$seul_env" ] && say "ERREUR  absentes de .env.example : $(echo "$seul_env" | tr '\n' ' ')"
+    [ -n "$seul_exemple" ] && say "ERREUR  absentes de .env : $(echo "$seul_exemple" | tr '\n' ' ')"
+    rc=1
+  fi
+fi
+
+say ""
 if [ "$rc" -eq 0 ]; then say "Lint : tout est conforme"; else say "Lint : ÉCHEC (voir les ERREUR ci-dessus)"; fi
 exit "$rc"

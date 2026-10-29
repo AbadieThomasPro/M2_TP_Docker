@@ -8,7 +8,7 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 |---|---|---|---|
 | `ARG` | Dockerfile | **Build** uniquement | Paramètre la construction de l'image (version d'Alpine, port documenté). N'existe plus dans le conteneur, sauf s'il est recopié dans un `ENV`. |
 | `ENV` | Dockerfile | **Run** | Valeurs **par défaut** de l'application, présentes dans l'image. L'image fonctionne seule, même sans compose. |
-| `.env` | Racine du projet | Lecture par **compose** | Source unique des valeurs : compose remplace chaque `${VARIABLE}` du `docker-compose.yml` par sa valeur. |
+| `.env` | Racine du projet, copié de `.env.example` (non versionné) | Lecture par **compose** | Source unique des valeurs : compose remplace chaque `${VARIABLE}` du `docker-compose.yml` par sa valeur. |
 
 ```
  .env ──▶ docker-compose.yml ─┬─ build.args:   ──▶ ARG  (build de l'image)
@@ -27,4 +27,5 @@ La configuration se fait à trois niveaux, chacun avec un rôle précis :
 - **Une seule source de vérité** : les ports, la mémoire, les CPU et les durées de vie sont regroupés dans un seul fichier. Le `docker-compose.yml` ne contient plus de valeurs en dur.
 - **Cohérence entre services** : `BACK_PORT` est utilisé à la fois par le back (port d'écoute) et par la gateway (port à joindre). Une seule modification met les deux à jour.
 - **Surcharge simple** : une variable d'environnement du shell est prioritaire sur le `.env`. Par exemple, `TTL_DEFAULT_H=1 docker compose up -d` change la durée de vie par défaut sans modifier de fichier ni reconstruire l'image. C'est le mécanisme utilisé dans nos tests (par exemple `CLEANUP_INTERVAL_S=10` pour accélérer les passes du worker).
-- Le `.env` est **versionné volontairement** : il ne contient aucun secret, seulement de la configuration.
+- **Seul le modèle est versionné** : `.env.example`, copié en `.env` à l'installation (`cp .env.example .env`). Le `.env` est dans le `.gitignore`, même sans secret aujourd'hui : chaque machine règle ses valeurs sans les commiter, et un secret ajouté un jour ne pourrait pas fuir. Le jeton Claude de l'étape IA a son propre modèle avec une fausse clé (`ci/ia.env.example`).
+- **Pas de divergence** : le lint de la CI échoue si une variable n'est présente que dans le modèle ou que dans le `.env`. Sans `.env`, `swarm-deploy` et `ci/pipeline` s'arrêtent avec un message clair au lieu de lancer des services aux réglages vides.

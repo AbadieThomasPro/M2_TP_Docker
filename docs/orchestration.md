@@ -5,7 +5,8 @@
 ## Lancement
 
 ```bash
-docker compose up -d --build   # build des 3 images puis démarrage
+cp .env.example .env           # une fois : configuration locale (non versionnée)
+docker compose up -d --build   # build des images puis démarrage
 docker compose ps              # état et santé des conteneurs
 docker compose down            # arrêt propre (SIGTERM / SIGQUIT) et suppression
 ```

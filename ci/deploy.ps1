@@ -18,6 +18,9 @@ Set-Location (Split-Path $PSScriptRoot -Parent)
 $stack = "cloud"
 $services = @("back", "gateway", "front", "cleaner", "autoscaler")
 
+# Le .env n'est pas versionné : sans lui, la stack serait déployée avec des réglages vides
+if (-not (Test-Path .env)) { Write-Host ".env absent : le créer avec  cp .env.example .env"; exit 1 }
+
 if ((docker info --format '{{.Swarm.LocalNodeState}}') -ne 'active') {
   Write-Host "Swarm inactif : déploiement impossible (l'activer une fois avec docker swarm init)"
   exit 1

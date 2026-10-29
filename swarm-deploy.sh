@@ -12,6 +12,9 @@
 set -e
 cd "$(dirname "$0")"
 
+# Le .env n'est pas versionné : sans lui, chaque valeur serait vide et les services recevraient des réglages faux
+[ -f .env ] || { echo ".env absent : le créer avec  cp .env.example .env"; exit 1; }
+
 if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
   echo "Swarm n'est pas actif. Activez-le une fois avec : docker swarm init"
   echo "(réversible avec : docker swarm leave --force)"
