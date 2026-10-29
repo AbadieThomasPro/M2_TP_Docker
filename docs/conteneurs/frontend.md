@@ -93,7 +93,7 @@ Variables d'environnement surchargeables avec `-e` ou `environment:` dans le com
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PORT` | `80` (vient de l'ARG) | Port d'écoute du serveur HTTP. |
-| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo). Variable lue par Node lui-même : pas besoin de shell dans la `CMD`. À aligner sur la limite mémoire du conteneur pour que Node libère la mémoire avant d'être tué par Docker. Dans le compose, la valeur vient de `FRONT_NODE_MAX_MEMORY`. |
+| `NODE_OPTIONS` | `--max-old-space-size=64` | Mémoire max du tas Node (Mo). Variable lue par Node lui-même : pas besoin de shell dans la `CMD`. La moitié de la limite mémoire prévue (128 Mo), même valeur que le `.env` : Node libère la mémoire avant d'être tué par Docker. Dans le compose, elle vient de `FRONT_NODE_MAX_MEMORY`. |
 | `GATEWAY_HOST` | `gateway` | Hôte vers lequel relayer `/api` : le nom du service gateway dans le compose. |
 | `GATEWAY_PORT` | `80` | Port de la gateway. |
 | `TZ` | `Europe/Paris` | Fuseau horaire. |

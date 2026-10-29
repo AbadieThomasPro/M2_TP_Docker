@@ -28,7 +28,7 @@ services:
     volumes:
       - stockage:/data
     read_only: true
-    stop_grace_period: 10s
+    # Ni stop_signal ni stop_grace_period : le signal d'arrêt vient de l'image, le délai de 10 s de Swarm suffit
     networks:
       - interne-back
     deploy:
@@ -86,7 +86,6 @@ services:
         tmpfs:
           size: 1048576
     read_only: true
-    stop_grace_period: 10s
     # network_mode: none n'existe pas en Swarm : le worker rejoint "isole", un réseau interne
     # dont il est le seul membre. Même effet : il ne peut joindre personne, ni Internet
     networks:
@@ -132,7 +131,6 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
-    stop_grace_period: 10s
     networks:
       - interne-front
       - interne-back
@@ -177,7 +175,6 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
-    stop_grace_period: 10s
     networks:
       - public
       - interne-front
@@ -230,7 +227,6 @@ services:
         tmpfs:
           size: 1048576
     read_only: true
-    stop_grace_period: 10s
     # Son propre réseau interne, sans autre membre : il ne parle qu'au moteur, par le socket (un fichier,
     # pas le réseau). Distinct de "isole" : le cleaner et lui n'ont aucune raison de se joindre
     networks:

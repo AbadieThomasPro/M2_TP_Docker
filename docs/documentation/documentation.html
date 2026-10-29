@@ -278,7 +278,7 @@ sequenceDiagram
   <h3>Arguments : ARG (build) → ENV (défaut de l'image) → <code>.env</code> (déploiement)</h3>
   <table>
     <tr><th>Niveau</th><th>Rôle</th><th>Traduction dans le compose</th></tr>
-    <tr><td><b>ARG</b></td><td>Valeur figée au build : <code>ALPINE_VERSION</code>, <code>PORT</code> (→ <code>EXPOSE</code>), <code>STORAGE_GID</code>, <code>DOCKER_GID</code></td><td><code>build.args</code> ← <code>.env</code></td></tr>
+    <tr><td><b>ARG</b></td><td>Valeur figée au build : <code>ALPINE_VERSION</code>, <code>PORT</code> (→ <code>EXPOSE</code>), <code>STORAGE_GID</code>, <code>DOCKER_GID</code></td><td><code>build.args</code> ← <code>.env</code> seulement, jamais au run (sauf <code>PORT</code>, utile aux deux : même variable du <code>.env</code>)</td></tr>
     <tr><td><b>ENV</b></td><td>Défaut dans l'image : l'image démarre seule, sans compose</td><td><code>environment:</code> ← <code>.env</code> (changer une valeur = sans rebuild)</td></tr>
     <tr><td><b>.env</b></td><td>Source unique de toutes les valeurs ; versionné (aucun secret)</td><td>Aucune valeur en dur dans le compose, sauf les noms de service</td></tr>
   </table>
@@ -288,7 +288,7 @@ sequenceDiagram
     <tr><th>Variable</th><th>Image</th><th>Valeur (.env)</th><th>Pourquoi</th></tr>
     <tr><td><code>PORT</code></td><td>toutes sauf cleaner</td><td>80 / 3000</td><td>Même valeur pour <code>EXPOSE</code> et l'écoute</td></tr>
     <tr><td><code>NODE_OPTIONS</code></td><td>front, back</td><td><code>--max-old-space-size=64</code></td><td>Tas Node à la moitié de la limite mémoire : Node libère avant d'être tué (OOM)</td></tr>
-    <tr><td><code>MAX_UPLOAD_MB</code></td><td>gateway, back</td><td>50</td><td>Refus (413) dès la gateway, double sécurité dans le back</td></tr>
+    <tr><td><code>MAX_UPLOAD_MB</code></td><td>gateway, back</td><td>50 (image : 10)</td><td>Refus (413) dès la gateway, double sécurité dans le back. L'image garde un défaut prudent, le <code>.env</code> fixe la valeur du déploiement</td></tr>
     <tr><td><code>TTL_DEFAULT_H</code> / <code>TTL_MAX_H</code></td><td>back</td><td>24 / 168</td><td>Durée de vie par défaut (1 journée) et max (7 jours)</td></tr>
     <tr><td><code>STORAGE_QUOTA_MB</code></td><td>back</td><td>1024</td><td>Protège le disque de l'hôte (<code>507</code> au-delà)</td></tr>
     <tr><td><code>WORKER_PROCESSES</code> / <code>…CONNECTIONS</code></td><td>gateway</td><td>1 / 512</td><td>Un worker par CPU alloué (moins d'un CPU)</td></tr>
@@ -327,7 +327,7 @@ sequenceDiagram
     <tr><td>cleaner</td><td><code>trap</code> ; suppression en arrière-plan + <code>wait</code>, groupe <code>setsid</code> arrêté d'un coup ; chaque suppression est atomique</td><td>0,5 à 0,6 s en pleine passe (10 000 fichiers)</td><td class="ok">0</td></tr>
     <tr><td>autoscaler</td><td><code>trap</code> ; relevé et <code>sleep</code> en arrière-plan + <code>wait</code></td><td>0,6 s</td><td class="ok">0</td></tr>
   </table>
-  <p class="note"><code>0</code> = signal traité ; <code>137</code> = signal ignoré, tué au bout de <code>stop_grace_period: 10s</code>. Vérifié avec <code>docker inspect -f '{{.State.ExitCode}}'</code>.</p>
+  <p class="note"><code>0</code> = signal traité ; <code>137</code> = signal ignoré, tué au bout des 10 s par défaut de Docker. Signal défini dans l'image seulement : aucun <code>stop_signal</code> ni <code>stop_grace_period</code> dans le compose ou la stack. Vérifié avec <code>docker inspect -f '{{.State.ExitCode}}'</code>.</p>
 </section>
 
 <!-- ===================== PAGE 7 : SWARM ET AUTOSCALING ===================== -->

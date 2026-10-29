@@ -54,10 +54,11 @@ RUN adduser -D -H front
 ARG PORT=80
 
 # Valeurs par défaut en ENV : l'image démarre seule, le compose les surcharge sans rebuild
-# NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire
+# NODE_OPTIONS : lu par Node lui-même, évite de passer par un shell dans la CMD pour fixer la mémoire.
+# 64 Mo = moitié des 128 Mo prévus pour le conteneur, comme le .env : Node libère avant d'être tué (OOM)
 ENV TZ=Europe/Paris \
     PORT=${PORT} \
-    NODE_OPTIONS="--max-old-space-size=128" \
+    NODE_OPTIONS="--max-old-space-size=64" \
     GATEWAY_HOST=gateway \
     GATEWAY_PORT=80
 

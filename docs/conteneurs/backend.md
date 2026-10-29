@@ -106,7 +106,7 @@ Stage final   : alpine + nodejs + tini + tzdata ◀─────────�
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PORT` | `3000` (vient de l'ARG) | Port d'écoute de l'API. |
-| `NODE_OPTIONS` | `--max-old-space-size=128` | Mémoire max du tas Node (Mo), lue par Node lui-même, à aligner sur la limite mémoire du conteneur. Dans le compose, la valeur vient de `BACK_NODE_MAX_MEMORY`. |
+| `NODE_OPTIONS` | `--max-old-space-size=64` | Mémoire max du tas Node (Mo), lue par Node lui-même : la moitié de la limite mémoire prévue (128 Mo), même valeur que le `.env`. Dans le compose, elle vient de `BACK_NODE_MAX_MEMORY`. |
 | `STORAGE_DIR` | `/data/files` | Dossier où l'API stockera les fichiers. Le code lit ce chemin au lieu de l'écrire en dur. Il doit rester sous `/data`, le point de montage du volume, sinon les fichiers seraient écrits dans le conteneur et perdus à sa suppression. |
 | `MAX_UPLOAD_MB` | `10` (`50` dans le `.env`) | Taille max d'un envoi, la même que pour la gateway. Double sécurité : le back refuse aussi (`413`) si on l'appelle sans passer par la gateway. |
 | `TTL_DEFAULT_H` | `24` | Durée de vie (heures) d'un fichier envoyé sans `ttl`. |

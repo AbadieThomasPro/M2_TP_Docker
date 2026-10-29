@@ -42,8 +42,8 @@ services:
     # Système de fichiers de l'image en lecture seule : en cas de faille, impossible de modifier le code
     # ou de déposer un binaire. Le back n'écrit que dans le volume (envois compris, via .incoming/)
     read_only: true
-    # 10 s : largement au-dessus du temps d'arrêt mesuré (< 1 s) avant le SIGKILL
-    stop_grace_period: 10s
+    # Arrêt : pas de stop_signal ni de stop_grace_period ici. Le signal est l'affaire de l'image (SIGTERM par
+    # défaut, STOPSIGNAL dans le Dockerfile de la gateway) et le délai de 10 s de Docker suffit (arrêt mesuré < 1 s)
     # Relance après un crash, mais respecte un arrêt volontaire
     restart: unless-stopped
     # Uniquement le réseau de la gateway : le back n'est joignable ni de l'extérieur ni par le front
@@ -85,8 +85,6 @@ services:
     # /tmp en RAM et minuscule : il ne contient que le heartbeat, et compte dans la mémoire du conteneur
     tmpfs:
       - /tmp:size=1m
-    # 10 s : le worker s'arrête après le fichier en cours (mesuré, voir README)
-    stop_grace_period: 10s
     restart: unless-stopped
 
   gateway:
@@ -126,7 +124,6 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
-    stop_grace_period: 10s
     restart: unless-stopped
     # Pas de ports publiés ; branchée sur les deux réseaux internes : c'est le seul pont entre front et back
     networks:
@@ -167,7 +164,6 @@ services:
     sysctls:
       net.ipv4.tcp_rmem: "4096 131072 ${TCP_BUFFER_MAX_BYTES}"
       net.ipv4.tcp_wmem: "4096 16384 ${TCP_BUFFER_MAX_BYTES}"
-    stop_grace_period: 10s
     restart: unless-stopped
     # public pour être joignable depuis l'hôte, interne-front pour joindre la gateway (et pas le back)
     networks:
